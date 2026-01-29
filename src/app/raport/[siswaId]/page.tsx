@@ -96,19 +96,34 @@ export default function RaportPage({ params }: { params: Promise<{ siswaId: stri
       {/* KERTAS A4 (210mm x 297mm) */}
       <div className="max-w-[210mm] min-h-[297mm] mx-auto bg-white shadow-2xl print:shadow-none p-[20mm] relative text-slate-900 leading-relaxed">
         
-        {/* === BAGIAN 1: KOP SURAT DINAMIS === */}
-        <div className="border-b-4 border-double border-slate-800 pb-6 mb-8 text-center">
-            <h1 className="text-3xl font-bold uppercase tracking-wide text-slate-900">
-                {data?.siswa?.instansi?.nama_instansi || 'NAMA TPQ BELUM DISET'}
-            </h1>
-            <p className="text-sm text-slate-600 mt-1">
-                {data?.siswa?.instansi?.alamat || 'Alamat belum diatur'}
-            </p>
-            <p className="text-sm text-slate-600">
-                {data?.siswa?.instansi?.kota && `${data?.siswa?.instansi?.kota} • `} 
-                Telp: {data?.siswa?.instansi?.telepon || '-'} 
-                {data?.siswa?.instansi?.email && ` • Email: ${data?.siswa?.instansi?.email}`}
-            </p>
+        {/* === BAGIAN 1: KOP SURAT DENGAN LOGO === */}
+        <div className="border-b-4 border-double border-slate-800 pb-6 mb-8 relative">
+            {/* LOGO - Muncul jika URL ada */}
+            {data?.siswa?.instansi?.logo_url && (
+                <div className="absolute left-0 top-0 h-full flex items-center">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img 
+                        src={data?.siswa?.instansi?.logo_url} 
+                        alt="Logo" 
+                        className="h-24 w-auto object-contain"
+                    />
+                </div>
+            )}
+            
+            {/* TEXT KOP - Diberi padding kiri jika ada logo agar tidak nabrak */}
+            <div className={`text-center ${data?.siswa?.instansi?.logo_url ? 'pl-20' : ''}`}>
+                <h1 className="text-3xl font-bold uppercase tracking-wide text-slate-900">
+                    {data?.siswa?.instansi?.nama_instansi || 'NAMA TPQ BELUM DISET'}
+                </h1>
+                <p className="text-sm text-slate-600 mt-1">
+                    {data?.siswa?.instansi?.alamat || 'Alamat belum diatur'}
+                </p>
+                <p className="text-sm text-slate-600">
+                    {data?.siswa?.instansi?.kota && `${data?.siswa?.instansi?.kota} • `} 
+                    Telp: {data?.siswa?.instansi?.telepon || '-'} 
+                    {data?.siswa?.instansi?.email && ` • Email: ${data?.siswa?.instansi?.email}`}
+                </p>
+            </div>
         </div>
 
         {/* JUDUL */}

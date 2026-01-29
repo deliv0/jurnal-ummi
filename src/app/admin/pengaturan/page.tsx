@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import Link from 'next/link'
-import { ArrowLeft, Save, Building, Loader2, CheckCircle, AlertCircle } from 'lucide-react'
+import { ArrowLeft, Save, Building, Loader2, CheckCircle, AlertCircle, Image as ImageIcon } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 
 export default function PengaturanPage() {
@@ -23,15 +23,14 @@ export default function PengaturanPage() {
     telepon: '',
     email: '',
     kepala_instansi: '',
-    nomor_induk_kepala: ''
+    nomor_induk_kepala: '',
+    logo_url: '' // <-- KOLOM BARU
   })
 
-  // 1. LOAD DATA SAAT INI
+  // 1. LOAD DATA
   useEffect(() => {
     const fetchData = async () => {
-      // Ambil satu-satunya data instansi
       const { data } = await supabase.from('instansi').select('*').limit(1).single()
-      
       if (data) {
         setFormData({
             id: data.id,
@@ -41,7 +40,8 @@ export default function PengaturanPage() {
             telepon: data.telepon || '',
             email: data.email || '',
             kepala_instansi: data.kepala_instansi || '',
-            nomor_induk_kepala: data.nomor_induk_kepala || ''
+            nomor_induk_kepala: data.nomor_induk_kepala || '',
+            logo_url: data.logo_url || ''
         })
       }
       setLoading(false)
@@ -56,35 +56,18 @@ export default function PengaturanPage() {
     setMessage(null)
 
     try {
-        // Jika belum ada data, kita Insert. Jika sudah ada, kita Update.
-        // Tapi karena kita ambil ID di awal, asumsi Update.
         let error = null
-        
         if (formData.id) {
-            const { error: err } = await supabase
-                .from('instansi')
-                .update({
-                    nama_instansi: formData.nama_instansi,
-                    alamat: formData.alamat,
-                    kota: formData.kota,
-                    telepon: formData.telepon,
-                    email: formData.email,
-                    kepala_instansi: formData.kepala_instansi,
-                    nomor_induk_kepala: formData.nomor_induk_kepala
-                })
-                .eq('id', formData.id)
+            const { error: err } = await supabase.from('instansi').update(formData).eq('id', formData.id)
             error = err
         } else {
-            // Jaga-jaga jika tabel kosong melompong
             const { error: err } = await supabase.from('instansi').insert(formData)
             error = err
         }
 
         if (error) throw error
-
         setMessage({ type: 'success', text: 'Identitas Sekolah berhasil diperbarui!' })
         router.refresh()
-
     } catch (err: any) {
         setMessage({ type: 'error', text: err.message })
     } finally {
@@ -119,13 +102,25 @@ export default function PengaturanPage() {
             </div>
         )}
 
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <form onSubmit={handleSave} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="bg-blue-50 p-4 border-b border-blue-100 flex items-center gap-2 text-blue-800 font-semibold">
                 <Building size={20}/> Form Data Instansi
             </div>
             
-            <form onSubmit={handleSave} className="p-6 space-y-6">
-                
+            <div className="p-6 space-y-6">
+                {/* LOGO URL */}
+                <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                    <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2">
+                        <ImageIcon size={16}/> Link Logo Sekolah (URL)
+                    </label>
+                    <input name="logo_url" value={formData.logo_url} onChange={handleChange}
+                        className="w-full p-2 border border-slate-300 rounded-lg text-sm" 
+                        placeholder="https://website-sekolah.com/logo.png"/>
+                    <p className="text-xs text-slate-500 mt-1">
+                        *Masukkan link gambar logo (format .png/.jpg). Jika kosong, logo tidak akan muncul.
+                    </p>
+                </div>
+
                 {/* IDENTITAS UMUM */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="md:col-span-2">
@@ -144,7 +139,6 @@ export default function PengaturanPage() {
                         <label className="block text-sm font-medium text-slate-700 mb-1">Kota / Kabupaten</label>
                         <input name="kota" value={formData.kota} onChange={handleChange}
                             className="w-full p-2 border border-slate-300 rounded-lg" placeholder="Jakarta Selatan"/>
-                        <p className="text-xs text-slate-400 mt-1">*Untuk tanggal raport (Jakarta, 20 Mei...)</p>
                     </div>
 
                     <div>
@@ -175,16 +169,14 @@ export default function PengaturanPage() {
                         </div>
                     </div>
                 </div>
+            </div>
 
-                <div className="pt-4">
-                    <button type="submit" disabled={saving} className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg shadow-lg hover:bg-blue-700 active:scale-95 transition-all flex justify-center items-center gap-2">
-                        {saving ? <Loader2 className="animate-spin"/> : <><Save size={20}/> SIMPAN PENGATURAN</>}
-                    </button>
-                </div>
-
-            </form>
-        </div>
-
+            <div className="p-6 bg-slate-50 border-t border-slate-200">
+                <button type="submit" disabled={saving} className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg shadow-lg hover:bg-blue-700 active:scale-95 transition-all flex justify-center items-center gap-2">
+                    {saving ? <Loader2 className="animate-spin"/> : <><Save size={20}/> SIMPAN PENGATURAN</>}
+                </button>
+            </div>
+        </form>
       </div>
     </div>
   )
