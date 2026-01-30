@@ -66,7 +66,7 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                   // Siapkan data untuk insert massal
                   const newTargets = masterTargets.map(t => ({
                       siswa_id: siswaId,
-                      target_id: t.id,
+                      target_ref_id: t.id,
                       status: 'active'
                   }))
 
