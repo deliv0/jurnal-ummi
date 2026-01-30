@@ -1,0 +1,21 @@
+{
+  "name": "Jurnal Ummi Digital",
+  "short_name": "JurnalUmmi",
+  "description": "Aplikasi Monitoring Pembelajaran Al-Quran",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
