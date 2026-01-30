@@ -23,41 +23,77 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
   // STATE FORM UTAMA
   const [formValues, setFormValues] = useState<Record<string, any>>({})
   const [kehadiran, setKehadiran] = useState('hadir')
-  
-  // STATE KHUSUS AL-QURAN (Tahfidz & Tilawah)
   const [quranState, setQuranState] = useState<Record<string, any>>({})
-
   const [message, setMessage] = useState<{type: 'success'|'error', text: string} | null>(null)
 
   useEffect(() => {
     const fetchAllData = async () => {
       setLoading(true)
       
-      // Ambil Siswa
+      // 1. AMBIL DATA SISWA
       const { data: dataSiswa } = await supabase
         .from('siswa')
         .select('*, kelompok(nama_kelompok), level(nama)')
         .eq('id', siswaId)
         .single()
+      
       if(dataSiswa) setSiswa(dataSiswa)
 
-      // Ambil Target
-      const { data: dataTarget } = await supabase
+      // 2. CEK TARGET PEMBELAJARAN (FIX: AUTO SYNC)
+      let currentTargets = []
+      
+      // A. Coba ambil yang sudah ada
+      const { data: existingTargets } = await supabase
         .from('siswa_target')
         .select('*, target_pembelajaran(judul, kategori_target)')
         .eq('siswa_id', siswaId)
         .eq('status', 'active')
+
+      if (existingTargets && existingTargets.length > 0) {
+          currentTargets = existingTargets
+      } else {
+          // B. JIKA KOSONG (Kasus Siswa Baru), COPY DARI MASTER KURIKULUM
+          if (dataSiswa?.current_level_id) {
+              console.log("Target kosong, melakukan auto-sync dari level...")
+              
+              // Ambil target master sesuai level siswa
+              const { data: masterTargets } = await supabase
+                  .from('target_pembelajaran')
+                  .select('*')
+                  .eq('level_id', dataSiswa.current_level_id)
+              
+              if (masterTargets && masterTargets.length > 0) {
+                  // Siapkan data untuk insert massal
+                  const newTargets = masterTargets.map(t => ({
+                      siswa_id: siswaId,
+                      target_id: t.id,
+                      status: 'active'
+                  }))
+
+                  // Insert ke database
+                  const { data: insertedData, error } = await supabase
+                      .from('siswa_target')
+                      .insert(newTargets)
+                      .select('*, target_pembelajaran(judul, kategori_target)')
+
+                  if (!error && insertedData) {
+                      currentTargets = insertedData
+                  }
+              }
+          }
+      }
       
-      if(dataTarget) {
-        setActiveTargets(dataTarget)
+      // C. SET STATE TARGET
+      if(currentTargets.length > 0) {
+        setActiveTargets(currentTargets)
         const initialForm: Record<string, any> = {}
-        dataTarget.forEach((t: any) => {
+        currentTargets.forEach((t: any) => {
             initialForm[t.id] = { halaman: '', nilai: '', catatan: '' }
         })
         setFormValues(initialForm)
       }
 
-      // Ambil Riwayat
+      // 3. AMBIL RIWAYAT
       const { data: dataRiwayat } = await supabase
         .from('jurnal_harian')
         .select(`
@@ -79,7 +115,7 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
     fetchAllData()
   }, [siswaId])
 
-  // UPDATE FORM STANDARD
+  // --- LOGIC FORM INPUT SAMA SEPERTI SEBELUMNYA ---
   const handleInputChange = (targetId: string, field: string, value: string) => {
     setFormValues(prev => ({
         ...prev,
@@ -87,24 +123,18 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
     }))
   }
 
-  // UPDATE KHUSUS QURAN (Tilawah & Tahfidz)
   const handleQuranChange = (targetId: string, field: 'juz'|'surah'|'halaman'|'ayat', value: any) => {
     setQuranState(prev => {
         const newState = { 
             ...prev, 
             [targetId]: { ...prev[targetId], [field]: value } 
         }
-        
-        // LOGIKA PEMBUATAN STRING OTOMATIS
         const d = newState[targetId] || {}
         const surah = d.surah || ''
         const hal = d.halaman ? `Hal. ${d.halaman}` : ''
         const ayat = d.ayat ? `Ayat ${d.ayat}` : ''
-        
         const finalString = [surah, hal, ayat].filter(Boolean).join(' ');
-
         handleInputChange(targetId, 'halaman', finalString)
-
         return newState
     })
   }
@@ -141,7 +171,7 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
         const resetForm: Record<string, any> = {}
         activeTargets.forEach((t: any) => { resetForm[t.id] = { halaman: '', nilai: '', catatan: '' } })
         setFormValues(resetForm)
-        setQuranState({}) 
+        setQuranState({})
         
         router.refresh()
         window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -159,8 +189,7 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20">
-      
-      {/* HEADER YANG SUDAH DIMODIFIKASI */}
+      {/* HEADER */}
       <header className="bg-white sticky top-0 z-10 shadow-sm border-b px-4 py-3 flex items-center justify-between gap-3 print:hidden">
         <div className="flex items-center gap-3">
             <Link href={`/kelompok/${kelompokId}`} className="p-2 rounded-full hover:bg-slate-100 text-slate-600">
@@ -171,8 +200,6 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                 <p className="text-xs text-slate-500">{siswa?.level?.nama} • {siswa?.kelompok?.nama_kelompok}</p>
             </div>
         </div>
-        
-        {/* TOMBOL BARU KE RAPORT */}
         <Link 
             href={`/raport/${siswaId}`} 
             className="text-xs font-bold bg-blue-50 text-blue-600 px-3 py-2 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-1"
@@ -183,7 +210,6 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
       </header>
 
       <main className="max-w-2xl mx-auto p-4 space-y-6">
-
         {message && (
             <div className={`p-4 rounded-lg flex items-center gap-3 ${message.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                 {message.type === 'success' ? <CheckCircle size={24}/> : <AlertCircle size={24}/>}
@@ -204,16 +230,22 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
             </div>
         </div>
 
-        {/* INPUT TARGET (LOOPING) */}
+        {/* INPUT TARGET */}
         <div className="space-y-4">
             <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wider ml-1">Input Capaian</h2>
             
+            {activeTargets.length === 0 && (
+                <div className="p-6 bg-yellow-50 border border-yellow-200 rounded-xl text-center text-yellow-800 text-sm">
+                    <p className="font-bold">Tidak ada target pembelajaran.</p>
+                    <p>Mohon pastikan Level Santri sudah memiliki Kurikulum (Target Pembelajaran) di menu Admin.</p>
+                </div>
+            )}
+
             {activeTargets.map((target) => {
                 const cat = target.target_pembelajaran?.kategori_target || '';
                 const isTahfidz = cat.includes('tahfidz') || cat === 'takhassus';
                 const isTilawah = cat.includes('tilawah');
-                const isQuran = isTahfidz || isTilawah; 
-
+                const isQuran = isTahfidz || isTilawah;
                 const lastLog = getLastHistory(target.id);
 
                 return (
@@ -226,7 +258,6 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                         </div>
                         
                         <div className="p-4 grid grid-cols-12 gap-3">
-                            
                             {/* RIWAYAT TERAKHIR */}
                             {lastLog && (
                                 <div className="col-span-12 mb-1">
@@ -239,10 +270,7 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                                 </div>
                             )}
 
-                            {/* --- LOGIKA TAMPILAN FORM --- */}
-                            
                             {isQuran ? (
-                                // === FORM AL-QURAN (TAHFIDZ & TILAWAH) ===
                                 <div className="col-span-12 space-y-3 p-3 bg-slate-50 rounded-lg border border-slate-200">
                                     <div className="grid grid-cols-2 gap-2">
                                         <div>
@@ -274,49 +302,35 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                                         {isTilawah && (
                                             <div>
                                                 <label className="text-xs font-medium text-slate-500 mb-1 block">Halaman</label>
-                                                <input 
-                                                    type="number" 
-                                                    placeholder="Hal"
-                                                    className="w-full p-2 rounded border border-slate-300 text-sm focus:ring-2 focus:ring-blue-500"
+                                                <input type="number" placeholder="Hal" className="w-full p-2 rounded border border-slate-300 text-sm"
                                                     onChange={(e) => handleQuranChange(target.id, 'halaman', e.target.value)}
                                                 />
                                             </div>
                                         )}
-                                        
                                         <div className={isTilawah ? "" : "col-span-2"}>
                                             <label className="text-xs font-medium text-slate-500 mb-1 block">Ayat / Rentang</label>
-                                            <input 
-                                                type="text" 
-                                                placeholder="Contoh: 1-5"
-                                                className="w-full p-2 rounded border border-slate-300 text-sm focus:ring-2 focus:ring-blue-500"
+                                            <input type="text" placeholder="Contoh: 1-5" className="w-full p-2 rounded border border-slate-300 text-sm"
                                                 onChange={(e) => handleQuranChange(target.id, 'ayat', e.target.value)}
                                             />
                                         </div>
                                     </div>
-
                                     <div className="text-xs text-blue-600 text-right italic">
                                         Hasil: {formValues[target.id]?.halaman || '...'}
                                     </div>
                                 </div>
                             ) : (
-                                // === FORM STANDARD (JILID/LAINNYA) ===
                                 <div className="col-span-8">
                                     <label className="text-xs font-medium text-slate-500 mb-1 block">Capaian (Hal/Materi)</label>
-                                    <input 
-                                        type="text" 
-                                        placeholder="Cth: Hal 20"
-                                        className="w-full p-2 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                    <input type="text" placeholder="Cth: Hal 20" className="w-full p-2 rounded-lg border border-slate-300 text-sm"
                                         value={formValues[target.id]?.halaman || ''}
                                         onChange={(e) => handleInputChange(target.id, 'halaman', e.target.value)}
                                     />
                                 </div>
                             )}
                             
-                            {/* NILAI (Umum) */}
                             <div className={isQuran ? "col-span-12" : "col-span-4"}>
                                 <label className="text-xs font-medium text-slate-500 mb-1 block">Nilai</label>
-                                <select 
-                                    className="w-full p-2 rounded-lg border border-slate-300 text-sm bg-white"
+                                <select className="w-full p-2 rounded-lg border border-slate-300 text-sm bg-white"
                                     value={formValues[target.id]?.nilai || ''}
                                     onChange={(e) => handleInputChange(target.id, 'nilai', e.target.value)}
                                 >
@@ -328,7 +342,6 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                                 </select>
                             </div>
 
-                            {/* CATATAN */}
                             <div className="col-span-12">
                                 <label className="text-xs font-medium text-slate-500 mb-1 block">Catatan Guru</label>
                                 <input type="text" placeholder="Catatan evaluasi..." className="w-full p-2 rounded-lg border border-slate-300 text-sm outline-none"
@@ -342,7 +355,7 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
             })}
         </div>
 
-        {/* RIWAYAT (SECTION BAWAH) */}
+        {/* RIWAYAT */}
         <div className="pt-6">
             <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wider ml-1 mb-3 flex items-center gap-2">
                 <History size={16}/> Semua Riwayat
@@ -370,10 +383,9 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                 ))}
             </div>
         </div>
-
       </main>
 
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t p-4 shadow-lg z-20">
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t p-4 shadow-lg z-20 print:hidden">
         <div className="max-w-2xl mx-auto">
             <button onClick={handleSave} disabled={saving || activeTargets.length === 0}
                 className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl shadow-blue-200 shadow-lg hover:bg-blue-700 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:bg-slate-300">
