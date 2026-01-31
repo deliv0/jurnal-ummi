@@ -218,13 +218,24 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                 <p className="text-xs text-slate-500">{siswa?.level?.nama}</p>
             </div>
         </div>
-        <Link 
-            href={`/raport/${siswaId}`} 
-            className="text-xs font-bold bg-blue-50 text-blue-600 px-3 py-2 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-1"
-            target="_blank" 
-        >
-            <BookOpen size={16}/> Raport
-        </Link>
+        <div className="flex items-center gap-2">
+            {/* TOMBOL BARU: ARSIP */}
+            <Link 
+                href={`/arsip/${siswaId}`} 
+                className="text-xs font-bold bg-slate-100 text-slate-600 px-3 py-2 rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-1"
+            >
+                <History size={16}/> Arsip
+            </Link>
+
+            {/* TOMBOL LAMA: RAPORT */}
+            <Link 
+                href={`/raport/${siswaId}`} 
+                className="text-xs font-bold bg-blue-50 text-blue-600 px-3 py-2 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-1"
+                target="_blank" 
+            >
+                <BookOpen size={16}/> Raport
+            </Link>
+        </div>
       </header>
 
       <main className="max-w-2xl mx-auto p-4 space-y-4">
