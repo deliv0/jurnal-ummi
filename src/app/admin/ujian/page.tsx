@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import Link from 'next/link'
-import { ArrowLeft, Search, ClipboardCheck, Save, AlertCircle, CheckCircle, Loader2, Flag } from 'lucide-react' // Update Icon
+import { ArrowLeft, Search, ClipboardCheck, Save, AlertCircle, CheckCircle, Loader2 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 
 export default function AdminUjianPage() {
@@ -43,11 +43,12 @@ export default function AdminUjianPage() {
     if(!keyword) return
     setLoading(true)
     
+    // Cari siswa (Prioritaskan yang statusnya 'siap_tes')
     const { data } = await supabase
         .from('siswa')
         .select('*, level:current_level_id(id, nama), kelompok(nama_kelompok)')
         .ilike('nama_siswa', `%${keyword}%`)
-        .limit(5)
+        .limit(10)
     
     setSiswaResult(data || [])
     setSelectedSiswa(null)
@@ -67,12 +68,13 @@ export default function AdminUjianPage() {
         if(currentIdx !== -1 && currentIdx < levelList.length - 1) {
             setLevelTujuan(levelList[currentIdx + 1].id)
         } else {
-            setLevelTujuan('')
+            setLevelTujuan('') // Sudah level terakhir / tidak ketemu
         }
     }
     setNilai('')
     setPredikat('')
     setCatatan('')
+    setStatusLulus('lulus')
   }
 
   // 4. Auto Predikat
@@ -89,6 +91,28 @@ export default function AdminUjianPage() {
     else setStatusLulus('lulus')
   }
 
+  // --- LOGIC TAMBAHAN: GENERATE TARGET BARU ---
+  const generateNewTargets = async (siswaId: string, levelId: string) => {
+    // 1. Ambil template target dari level tujuan
+    const { data: masterTargets } = await supabase
+        .from('target_pembelajaran')
+        .select('id')
+        .eq('level_id', levelId)
+    
+    if(!masterTargets || masterTargets.length === 0) return
+
+    // 2. Siapkan data insert
+    const newTargets = masterTargets.map(t => ({
+        siswa_id: siswaId,
+        target_ref_id: t.id,
+        status: 'active'
+    }))
+
+    // 3. Masukkan ke database
+    await supabase.from('siswa_target').insert(newTargets)
+  }
+  // ---------------------------------------------
+
   // 5. SIMPAN HASIL UJIAN
   const handleSubmit = async (e: any) => {
     e.preventDefault()
@@ -98,13 +122,13 @@ export default function AdminUjianPage() {
     try {
         const { data: { user } } = await supabase.auth.getUser()
 
-        // A. Simpan Arsip
+        // A. Simpan Arsip ke Riwayat (Tabel Baru)
         const { error: errArsip } = await supabase.from('riwayat_kenaikan_level').insert({
             siswa_id: selectedSiswa.id,
             penguji_id: user?.id,
             level_asal_id: selectedSiswa.current_level_id,
             level_tujuan_id: statusLulus === 'lulus' ? levelTujuan : null,
-            nilai_angka: Number(nilai),
+            nilai_angka: Number(nilai) || 0,
             predikat: predikat,
             catatan: catatan,
             status_kelulusan: statusLulus,
@@ -112,30 +136,37 @@ export default function AdminUjianPage() {
         })
         if(errArsip) throw errArsip
 
-        // B. Update Siswa (PENTING: Reset status_tes jadi 'belajar')
-        if(statusLulus === 'lulus') {
+        // B. Update Status Siswa
+        if(statusLulus === 'lulus' && levelTujuan) {
+            
+            // 1. Update Level & Reset Status
             const { error: errUpdate } = await supabase
                 .from('siswa')
                 .update({ 
                     current_level_id: levelTujuan,
-                    status_tes: 'belajar' // <--- RESET STATUS PENGJUAN DI SINI
+                    status_tes: 'belajar' // Reset agar bisa belajar lagi
                 })
                 .eq('id', selectedSiswa.id)
             
             if(errUpdate) throw errUpdate
             
-            // Opsional: Bersihkan target lama
+            // 2. BERSIHKAN TARGET LAMA (Clean Slate)
             await supabase.from('siswa_target').delete().eq('siswa_id', selectedSiswa.id)
+
+            // 3. GENERATE TARGET BARU (CRUCIAL STEP!)
+            await generateNewTargets(selectedSiswa.id, levelTujuan)
+
         } else {
-            // Jika Gagal, mungkin status tes tetap 'siap_tes' (biar diuji ulang) atau dikembalikan ke 'belajar'
-            // Kita pilih kembalikan ke 'belajar' agar guru tahu harus membina lagi
+            // Jika Gagal, kembalikan ke status belajar agar guru tahu (atau tetap siap_tes jika mau diuji ulang besok)
+            // Disini kita kembalikan ke 'belajar'
              await supabase.from('siswa').update({ status_tes: 'belajar' }).eq('id', selectedSiswa.id)
         }
 
-        setMessage({ type: 'success', text: `Data tersimpan. Status pengajuan ujian telah di-reset.` })
-        setSelectedSiswa(null)
+        setMessage({ type: 'success', text: `Data tersimpan. Status santri telah diperbarui.` })
+        setSelectedSiswa(null) // Reset Form
 
     } catch (err: any) {
+        console.error(err)
         setMessage({ type: 'error', text: 'Gagal menyimpan: ' + err.message })
     } finally {
         setLoading(false)
@@ -161,9 +192,11 @@ export default function AdminUjianPage() {
 
         {/* PENCARIAN */}
         {!selectedSiswa && (
-            <div className="bg-white p-8 rounded-lg shadow-sm border border-slate-200 text-center">
+            <div className="bg-white p-8 rounded-lg shadow-sm border border-slate-200 text-center animate-in fade-in">
                 <ClipboardCheck className="mx-auto h-12 w-12 text-blue-500 mb-4"/>
-                <h2 className="text-lg font-semibold mb-2">Siapa yang akan diuji?</h2>
+                <h2 className="text-lg font-semibold mb-2">Pencarian Peserta Ujian</h2>
+                <p className="text-slate-500 mb-6 text-sm">Cari nama santri yang akan diuji kenaikan jilid.</p>
+                
                 <form onSubmit={handleSearch} className="max-w-md mx-auto relative">
                     <input 
                         type="text" 
@@ -189,7 +222,6 @@ export default function AdminUjianPage() {
                             <div>
                                 <div className="font-semibold text-slate-800 flex items-center gap-2">
                                     {s.nama_siswa}
-                                    {/* --- BADGE KHUSUS JIKA DIAJUKAN GURU --- */}
                                     {s.status_tes === 'siap_tes' && (
                                         <span className="inline-flex items-center gap-1 bg-green-600 text-white text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wider">
                                             <CheckCircle size={10} /> Siap Ujian
@@ -209,7 +241,7 @@ export default function AdminUjianPage() {
 
         {/* FORM PENILAIAN */}
         {selectedSiswa && (
-            <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+            <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-200">
                 {/* Header Form */}
                 <div className={`p-4 border-b flex justify-between items-center ${selectedSiswa.status_tes === 'siap_tes' ? 'bg-green-50 border-green-100' : 'bg-blue-50 border-blue-100'}`}>
                     <div>
@@ -222,65 +254,71 @@ export default function AdminUjianPage() {
                         <h2 className="text-xl font-bold text-slate-900">{selectedSiswa.nama_siswa}</h2>
                         <p className="text-sm text-slate-600">Level Saat Ini: {selectedSiswa.level?.nama}</p>
                     </div>
-                    <button onClick={() => setSelectedSiswa(null)} className="text-slate-400 hover:text-red-500 text-sm">Batal</button>
+                    <button onClick={() => setSelectedSiswa(null)} className="text-slate-400 hover:text-red-500 text-sm font-medium px-3 py-1 rounded hover:bg-red-50 transition-colors">Batal</button>
                 </div>
 
                 <form onSubmit={handleSubmit} className="p-6 space-y-6">
-                    {/* ... (Bagian Form Sama seperti sebelumnya) ... */}
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Nilai Akhir (0-100)</label>
+                    <div className="grid grid-cols-2 gap-6">
+                        <div className="col-span-2 sm:col-span-1">
+                            <label className="block text-sm font-bold text-slate-700 mb-2">Nilai Akhir (0-100)</label>
                             <input 
                                 type="number" 
                                 required
                                 max="100"
                                 value={nilai}
                                 onChange={(e) => handleNilaiChange(e.target.value)}
-                                className="w-full text-2xl font-bold p-2 border rounded-md border-slate-300 focus:ring-blue-500"
+                                className="w-full text-3xl font-bold p-3 border rounded-lg border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                                 placeholder="0"
                             />
-                            <p className="text-xs text-slate-500 mt-1">KKM: 76</p>
+                            <p className="text-xs text-slate-500 mt-2 font-medium">KKM Kelulusan: 76</p>
                         </div>
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Predikat</label>
-                            <input type="text" readOnly value={predikat} className="w-full bg-slate-50 p-3 border rounded-md border-slate-200 text-slate-600 font-medium"/>
+                        <div className="col-span-2 sm:col-span-1">
+                            <label className="block text-sm font-bold text-slate-700 mb-2">Predikat</label>
+                            <div className="w-full bg-slate-100 p-4 border rounded-lg border-slate-200 text-slate-700 font-bold text-lg min-h-[58px] flex items-center">
+                                {predikat || '-'}
+                            </div>
                         </div>
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-2">Keputusan Penguji</label>
+                        <label className="block text-sm font-bold text-slate-700 mb-3">Keputusan Penguji</label>
                         <div className="flex gap-4">
-                            <label className={`flex-1 border rounded-lg p-3 flex items-center gap-3 cursor-pointer ${statusLulus === 'lulus' ? 'bg-green-50 border-green-500 text-green-700' : 'opacity-50'}`}>
-                                <input type="radio" name="status" value="lulus" checked={statusLulus === 'lulus'} onChange={() => setStatusLulus('lulus')} />
+                            <label className={`flex-1 border-2 rounded-xl p-4 flex flex-col items-center gap-2 cursor-pointer transition-all ${statusLulus === 'lulus' ? 'bg-green-50 border-green-500 text-green-700 shadow-md' : 'border-slate-200 text-slate-400 hover:bg-slate-50'}`}>
+                                <input type="radio" name="status" value="lulus" checked={statusLulus === 'lulus'} onChange={() => setStatusLulus('lulus')} className="accent-green-600 w-5 h-5"/>
                                 <span className="font-bold">LULUS / NAIK LEVEL</span>
                             </label>
-                            <label className={`flex-1 border rounded-lg p-3 flex items-center gap-3 cursor-pointer ${statusLulus === 'gagal' ? 'bg-red-50 border-red-500 text-red-700' : 'opacity-50'}`}>
-                                <input type="radio" name="status" value="gagal" checked={statusLulus === 'gagal'} onChange={() => setStatusLulus('gagal')} />
+                            <label className={`flex-1 border-2 rounded-xl p-4 flex flex-col items-center gap-2 cursor-pointer transition-all ${statusLulus === 'gagal' ? 'bg-red-50 border-red-500 text-red-700 shadow-md' : 'border-slate-200 text-slate-400 hover:bg-slate-50'}`}>
+                                <input type="radio" name="status" value="gagal" checked={statusLulus === 'gagal'} onChange={() => setStatusLulus('gagal')} className="accent-red-600 w-5 h-5"/>
                                 <span className="font-bold">BELUM LULUS</span>
                             </label>
                         </div>
                     </div>
 
                     {statusLulus === 'lulus' && (
-                        <div className="bg-yellow-50 p-4 rounded-md border border-yellow-200">
-                            <label className="block text-sm font-medium text-yellow-800 mb-1">Naik ke Level:</label>
-                            <select required value={levelTujuan} onChange={(e) => setLevelTujuan(e.target.value)} className="w-full p-2 border rounded border-yellow-400 bg-white">
+                        <div className="bg-yellow-50 p-5 rounded-lg border border-yellow-200 animate-in slide-in-from-top-2">
+                            <label className="block text-sm font-bold text-yellow-800 mb-2">Naik ke Level:</label>
+                            <select required value={levelTujuan} onChange={(e) => setLevelTujuan(e.target.value)} className="w-full p-3 border rounded-lg border-yellow-400 bg-white font-medium text-slate-800 shadow-sm">
                                 <option value="">-- Pilih Level Tujuan --</option>
                                 {levelList.map(l => (
-                                    <option key={l.id} value={l.id}>{l.nama} ({l.kategori})</option>
+                                    <option key={l.id} value={l.id}>{l.nama} ({l.kategori || 'Umum'})</option>
                                 ))}
                             </select>
+                            <p className="text-xs text-yellow-700 mt-2">
+                                *Target pembelajaran siswa akan otomatis diperbarui sesuai level yang dipilih.
+                            </p>
                         </div>
                     )}
 
                     <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Catatan / Evaluasi</label>
-                        <textarea rows={3} value={catatan} onChange={(e) => setCatatan(e.target.value)} className="w-full p-2 border rounded-md border-slate-300"></textarea>
+                        <label className="block text-sm font-bold text-slate-700 mb-2">Catatan / Evaluasi</label>
+                        <textarea rows={3} value={catatan} onChange={(e) => setCatatan(e.target.value)} className="w-full p-3 border rounded-lg border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500" placeholder="Contoh: Hafalan lancar, namun tajwid perlu diperbaiki..."></textarea>
                     </div>
 
-                    <button type="submit" disabled={loading} className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 flex justify-center items-center gap-2">
-                        {loading ? <Loader2 className="animate-spin"/> : <><Save size={20}/> SIMPAN HASIL UJIAN</>}
-                    </button>
+                    <div className="pt-4 border-t border-slate-100">
+                        <button type="submit" disabled={loading} className="w-full bg-blue-600 text-white font-bold py-4 rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 active:scale-95 transition-all flex justify-center items-center gap-2 disabled:bg-slate-300 disabled:shadow-none">
+                            {loading ? <Loader2 className="animate-spin"/> : <><Save size={20}/> SIMPAN HASIL UJIAN</>}
+                        </button>
+                    </div>
                 </form>
             </div>
         )}
