@@ -313,7 +313,10 @@ export default async function Dashboard() {
   )
 }
 
-// SUB COMPONENTS
+// =========================================
+// SUB COMPONENTS (FIXED COLOR MAPPING)
+// =========================================
+
 function StatCard({ icon, label, value, sub, color }: any) {
     const colors: any = {
         blue: 'bg-blue-50 text-blue-600 border-blue-100',
@@ -324,7 +327,7 @@ function StatCard({ icon, label, value, sub, color }: any) {
     return (
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between h-32 hover:shadow-md transition-shadow">
             <div className="flex justify-between items-start">
-                <div className={`p-2 rounded-lg ${colors[color]}`}>{icon}</div>
+                <div className={`p-2 rounded-lg ${colors[color] || colors.blue}`}>{icon}</div>
             </div>
             <div>
                 <div className="text-3xl font-bold text-slate-900 tracking-tight">{value}</div>
@@ -335,9 +338,20 @@ function StatCard({ icon, label, value, sub, color }: any) {
 }
 
 function ShortcutItem({ href, icon, label, color }: any) {
+    // FIX: Tailwind tidak bisa baca dynamic string literal (text-${color}-600)
+    // Kita harus mapping full class name-nya.
+    const hoverColors: any = {
+        blue: 'group-hover:text-blue-600',
+        purple: 'group-hover:text-purple-600',
+        indigo: 'group-hover:text-indigo-600',
+        orange: 'group-hover:text-orange-600',
+        red: 'group-hover:text-red-600',
+        slate: 'group-hover:text-slate-800',
+    }
+
     return (
         <Link href={href} className="flex flex-col items-center justify-center p-4 rounded-xl bg-slate-50 hover:bg-white hover:shadow-md hover:scale-105 transition-all border border-slate-100 group">
-            <div className={`mb-2 text-slate-400 group-hover:text-${color}-600 transition-colors`}>
+            <div className={`mb-2 text-slate-400 transition-colors ${hoverColors[color] || 'group-hover:text-blue-600'}`}>
                 {icon}
             </div>
             <span className="text-xs font-semibold text-slate-600 group-hover:text-slate-900">{label}</span>
