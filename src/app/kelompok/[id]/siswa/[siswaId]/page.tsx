@@ -3,7 +3,7 @@
 import { useState, useEffect, use } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import Link from 'next/link'
-import { ArrowLeft, Save, Clock, History, BookOpen, CheckCircle, Loader2, AlertCircle, Mic, Book, ChevronDown, ChevronUp, ChevronRight, User } from 'lucide-react'
+import { ArrowLeft, Save, Clock, History, BookOpen, CheckCircle, Loader2, AlertCircle, Mic, Book, ChevronDown, ChevronRight, GraduationCap } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { QURAN_DATA, JUZ_LIST } from '@/data/quran'
 
@@ -16,13 +16,14 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
   const [siswa, setSiswa] = useState<any>(null)
   const [activeTargets, setActiveTargets] = useState<any[]>([])
   const [riwayat, setRiwayat] = useState<any[]>([])
-  const [kelompokSiswa, setKelompokSiswa] = useState<any[]>([]) // Untuk Navigasi Next/Prev
+  const [kelompokSiswa, setKelompokSiswa] = useState<any[]>([]) 
   const [loading, setLoading] = useState(true)
 
   // STATE UI
   const [activeTab, setActiveTab] = useState<'tahfidz' | 'tilawah'>('tahfidz') 
-  const [expandedTarget, setExpandedTarget] = useState<string | null>(null) // Accordion State
-  const [savingId, setSavingId] = useState<string | null>(null) // Loading per item
+  const [expandedTarget, setExpandedTarget] = useState<string | null>(null) 
+  const [savingId, setSavingId] = useState<string | null>(null)
+  const [submittingExam, setSubmittingExam] = useState(false)
   
   // STATE FORM
   const [formValues, setFormValues] = useState<Record<string, any>>({})
@@ -40,21 +41,19 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
     const { data: dataSiswa } = await supabase.from('siswa').select('*, kelompok(nama_kelompok), level(nama)').eq('id', siswaId).single()
     if(dataSiswa) setSiswa(dataSiswa)
 
-    // 2. AMBIL LIST TEMAN SEKELAS (Untuk Navigasi Next/Prev)
+    // 2. AMBIL LIST TEMAN (Navigasi)
     if(dataSiswa?.kelompok_id) {
-        // Ambil ID semua siswa di kelompok ini yg AKTIF & HADIR (Logic hadir opsional, sementara ambil semua aktif)
         const { data: teman } = await supabase.from('siswa').select('id').eq('kelompok_id', dataSiswa.kelompok_id).eq('status', 'aktif').order('nama_siswa')
         if(teman) setKelompokSiswa(teman)
     }
 
-    // 3. LOAD TARGET (AUTO SYNC)
+    // 3. LOAD TARGET
     let currentTargets = []
     const { data: existingTargets } = await supabase.from('siswa_target').select('*, target_pembelajaran(judul, kategori_target)').eq('siswa_id', siswaId).eq('status', 'active')
 
     if (existingTargets && existingTargets.length > 0) {
         currentTargets = existingTargets
     } else {
-        // Auto Sync jika kosong
         if (dataSiswa?.current_level_id) {
             const { data: masterTargets } = await supabase.from('target_pembelajaran').select('*').eq('level_id', dataSiswa.current_level_id)
             if (masterTargets && masterTargets.length > 0) {
@@ -99,31 +98,25 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
     })
   }
 
-  // --- SAVE PER ITEM ---
   const handleSaveItem = async (targetId: string) => {
     setSavingId(targetId)
     setMessage(null)
-
     try {
         const { data: { user } } = await supabase.auth.getUser()
         const input = formValues[targetId]
-
         if (!input.halaman && !input.nilai) throw new Error("Mohon isi capaian atau nilai.")
 
         const { error } = await supabase.from('jurnal_harian').insert({
             siswa_target_id: targetId,
             guru_id: user?.id,
-            status_kehadiran: 'hadir', // Selalu hadir krn sdh difilter di depan
+            status_kehadiran: 'hadir',
             halaman_ayat: input.halaman,
             nilai: input.nilai,
             catatan: input.catatan
         })
-
         if(error) throw error
-
         setMessage({ type: 'success', text: 'Tersimpan!' })
         
-        // Refresh Riwayat Lokal
         setRiwayat(prev => [{
             created_at: new Date().toISOString(),
             halaman_ayat: input.halaman,
@@ -133,13 +126,9 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
             siswa_target: { target_pembelajaran: { judul: activeTargets.find(t=>t.id===targetId)?.target_pembelajaran?.judul } }
         }, ...prev])
 
-        // Reset Form Item Ini
         setFormValues(prev => ({ ...prev, [targetId]: { halaman: '', nilai: '', catatan: '' } }))
         setQuranState(prev => { const n = {...prev}; delete n[targetId]; return n; })
-        
-        // Tutup Accordion (Opsional, agar guru bisa lanjut ke target lain)
         setExpandedTarget(null)
-
     } catch (err: any) {
         setMessage({ type: 'error', text: err.message })
     } finally {
@@ -147,7 +136,24 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
     }
   }
 
-  // --- NAVIGASI NEXT SISWA ---
+  // --- LOGIC PENGAJUAN UJIAN ---
+  const handleAjukanUjian = async () => {
+      if(!confirm("Apakah Anda yakin santri ini sudah menyelesaikan materi dan SIAP UJIAN kenaikan jilid?")) return;
+      
+      setSubmittingExam(true)
+      try {
+          const { error } = await supabase.from('siswa').update({ status_tes: 'siap_tes' }).eq('id', siswaId)
+          if(error) throw error
+          
+          setSiswa((prev: any) => ({ ...prev, status_tes: 'siap_tes' }))
+          alert("Berhasil diajukan! Santri kini masuk antrian ujian.")
+      } catch (err: any) {
+          alert("Gagal mengajukan: " + err.message)
+      } finally {
+          setSubmittingExam(false)
+      }
+  }
+
   const handleNextSiswa = () => {
       const currentIndex = kelompokSiswa.findIndex(s => s.id === siswaId)
       if(currentIndex !== -1 && currentIndex < kelompokSiswa.length - 1) {
@@ -160,7 +166,6 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
 
   const getLastHistory = (targetId: string) => riwayat.find(r => r.siswa_target_id === targetId)
 
-  // FILTER TARGET
   const filteredTargets = activeTargets.filter(t => {
       const cat = t.target_pembelajaran?.kategori_target || ''
       if (activeTab === 'tahfidz') return cat.includes('tahfidz') || cat === 'takhassus'
@@ -183,9 +188,24 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                 <p className="text-xs text-slate-500">{siswa?.level?.nama}</p>
             </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+            {/* TOMBOL UJIAN */}
+            {siswa?.status_tes === 'siap_tes' ? (
+                <span className="text-[10px] font-bold bg-orange-100 text-orange-700 px-2 py-1 rounded border border-orange-200">
+                    Menunggu Ujian
+                </span>
+            ) : (
+                <button 
+                    onClick={handleAjukanUjian} 
+                    disabled={submittingExam}
+                    className="p-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors flex items-center gap-1"
+                    title="Ajukan Ujian Kenaikan"
+                >
+                    {submittingExam ? <Loader2 size={18} className="animate-spin"/> : <GraduationCap size={18}/>}
+                </button>
+            )}
+            
             <Link href={`/arsip/${siswaId}`} className="p-2 bg-slate-100 text-slate-600 rounded-lg"><History size={18}/></Link>
-            <Link href={`/raport/${siswaId}`} target="_blank" className="p-2 bg-blue-50 text-blue-600 rounded-lg"><BookOpen size={18}/></Link>
         </div>
       </header>
 
@@ -243,7 +263,7 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                             </div>
                         </div>
 
-                        {/* BODY FORM (Hanya Render Jika Open agar Ringan) */}
+                        {/* BODY FORM (Hanya Render Jika Open) */}
                         {isOpen && (
                             <div className="p-4 bg-slate-50 border-t border-slate-100 animate-in slide-in-from-top-2">
                                 <div className="space-y-4">
@@ -300,7 +320,7 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
         </div>
       </main>
 
-      {/* FOOTER NAVIGASI NEXT SISWA */}
+      {/* FOOTER NAVIGASI */}
       <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t z-20">
           <div className="max-w-2xl mx-auto flex gap-3">
              <button onClick={() => router.back()} className="px-4 py-3 border border-slate-300 rounded-xl text-slate-600 font-bold text-sm">Kembali</button>
