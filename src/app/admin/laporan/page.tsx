@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import Link from 'next/link'
-import { ArrowLeft, Printer, Filter, Loader2, Calendar } from 'lucide-react'
+import { ArrowLeft, Printer, Filter, Loader2 } from 'lucide-react'
 
 export default function LaporanPage() {
   const supabase = createClient()
@@ -12,17 +12,19 @@ export default function LaporanPage() {
   const [kelompokList, setKelompokList] = useState<any[]>([])
   const [selectedKelompok, setSelectedKelompok] = useState('')
   
-  // Default: Minggu ini (Senin - Jumat)
+  // Default: Senin - Jumat minggu ini
   const curr = new Date()
   const first = curr.getDate() - curr.getDay() + 1
   const last = first + 4
-  
   const [startDate, setStartDate] = useState(new Date(curr.setDate(first)).toISOString().slice(0, 10))
   const [endDate, setEndDate] = useState(new Date(curr.setDate(last)).toISOString().slice(0, 10))
   
   // STATE DATA
-  const [laporan, setLaporan] = useState<any[]>([])
+  const [reportData, setReportData] = useState<any[]>([]) // Data siswa & jurnalnya
+  const [dateColumns, setDateColumns] = useState<string[]>([]) // List tanggal untuk header tabel
   const [loading, setLoading] = useState(false)
+  
+  // STATE INFO
   const [instansi, setInstansi] = useState<any>(null)
   const [detailKelompok, setDetailKelompok] = useState<any>(null)
 
@@ -36,95 +38,117 @@ export default function LaporanPage() {
     fetchMaster()
   }, [])
 
-  // FUNGSI CARI DATA
+  // FUNGSI UTAMA: BUILD MATRIX
   const handleFilter = async (e?: any) => {
     if(e) e.preventDefault()
     if(!selectedKelompok) return
     
     setLoading(true)
     
-    // 1. Ambil Detail Kelompok (Untuk Header Laporan)
+    // 1. Setup Header & Tanggal
     const detail = kelompokList.find(k => k.id === selectedKelompok)
     setDetailKelompok(detail)
 
-    // 2. Ambil Data Mentah
-    const { data: rawData } = await supabase
+    // Generate Array Tanggal (Senin s/d Jumat)
+    // --- PERBAIKAN DI SINI: Menambahkan tipe data string[] ---
+    const dates: string[] = [] 
+    
+    let currentDate = new Date(startDate)
+    const stopDate = new Date(endDate)
+    while (currentDate <= stopDate) {
+        dates.push(new Date(currentDate).toISOString().slice(0, 10))
+        currentDate.setDate(currentDate.getDate() + 1)
+    }
+    setDateColumns(dates)
+
+    // 2. Ambil Semua Siswa di Kelompok (Termasuk yg tidak masuk agar absen tetap ada)
+    const { data: listSiswa } = await supabase
+        .from('siswa')
+        .select('id, nama_siswa, nis')
+        .eq('kelompok_id', selectedKelompok)
+        .eq('status', 'aktif')
+        .order('nama_siswa')
+
+    if (!listSiswa) { setLoading(false); return; }
+
+    // 3. Ambil Jurnal di Rentang Tanggal
+    const { data: rawJurnal } = await supabase
         .from('jurnal_harian')
         .select(`
-            id, created_at, halaman_ayat, nilai, catatan,
+            created_at, halaman_ayat, nilai, catatan,
             siswa_target!inner (
-                siswa!inner ( id, nama_siswa, kelompok_id, level:current_level_id(nama) ),
+                siswa_id,
                 target_pembelajaran ( judul, kategori_target )
             )
         `)
         .eq('siswa_target.siswa.kelompok_id', selectedKelompok)
         .gte('created_at', startDate)
         .lte('created_at', endDate + 'T23:59:59')
-        .order('created_at', { ascending: true })
+        .order('created_at')
 
-    if (rawData) {
-        // 3. TRANSFORMASI DATA (MERGING ROW)
-        // Kita harus menggabungkan Tahfidz & Tahsin di hari yang sama untuk siswa yang sama
-        const mergedData: Record<string, any> = {}
+    // 4. MAPPING DATA (PIVOT)
+    const processedData = listSiswa.map(siswa => {
+        const row: any = {
+            id: siswa.id,
+            nama_siswa: siswa.nama_siswa,
+            nis: siswa.nis,
+            entries: {} // Key: Tanggal, Value: Array of Jurnal
+        }
 
-        rawData.forEach((row: any) => {
-            const date = row.created_at.split('T')[0]
-            const siswaId = row.siswa_target.siswa.id
-            const key = `${date}_${siswaId}`
+        // Inisialisasi setiap tanggal dengan array kosong
+        dates.forEach(d => row.entries[d] = [])
 
-            if (!mergedData[key]) {
-                mergedData[key] = {
-                    key,
-                    date: row.created_at,
-                    nama_siswa: row.siswa_target.siswa.nama_siswa,
-                    level_siswa: row.siswa_target.siswa.level?.nama,
-                    tahfidz_materi: '-',
-                    tahfidz_nilai: '-',
-                    tahsin_materi: '-',
-                    tahsin_nilai: '-',
+        // Isi dengan data jurnal jika ada
+        if (rawJurnal) {
+            rawJurnal.forEach((j: any) => {
+                const jDate = j.created_at.split('T')[0]
+                const jSiswaId = j.siswa_target.siswa_id
+                
+                if (jSiswaId === siswa.id && row.entries[jDate]) {
+                    row.entries[jDate].push({
+                        kategori: j.siswa_target.target_pembelajaran.kategori_target || 'umum',
+                        judul_target: j.siswa_target.target_pembelajaran.judul,
+                        capaian: j.halaman_ayat,
+                        nilai: j.nilai
+                    })
                 }
-            }
+            })
+        }
+        return row
+    })
 
-            const kategori = row.siswa_target.target_pembelajaran.kategori_target || ''
-            
-            // Logic Pemisahan Kolom
-            if (kategori.includes('tahfidz') || kategori.includes('takhassus') || kategori.includes('ziyadah') || kategori.includes('murajaah')) {
-                mergedData[key].tahfidz_materi = `${row.siswa_target.target_pembelajaran.judul} : ${row.halaman_ayat}`
-                mergedData[key].tahfidz_nilai = row.nilai || '-'
-            } else {
-                // Asumsi sisanya adalah Tahsin / Tilawah / Jilid / Ghorib
-                mergedData[key].tahsin_materi = `${row.siswa_target.target_pembelajaran.judul} : ${row.halaman_ayat}`
-                mergedData[key].tahsin_nilai = row.nilai || '-'
-            }
-        })
-
-        // Convert Object back to Array & Sort by Date then Name
-        const finalArray = Object.values(mergedData).sort((a: any, b: any) => {
-            return new Date(a.date).getTime() - new Date(b.date).getTime() || a.nama_siswa.localeCompare(b.nama_siswa)
-        })
-
-        setLaporan(finalArray)
-    }
+    setReportData(processedData)
     setLoading(false)
   }
 
-  // Helper Format Tanggal
-  const formatTanggalIndo = (dateStr: string) => {
-      const date = new Date(dateStr)
-      return date.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'short' })
+  // HELPER: SINGKATAN KATEGORI
+  const getKode = (kategori: string, judul: string) => {
+      const k = kategori ? kategori.toLowerCase() : ''
+      if (k.includes('tahfidz')) return 'TF'
+      if (k.includes('murajaah')) return 'MJ'
+      if (k.includes('ziyadah')) return 'ZD'
+      if (k.includes('tilawah')) return 'TL'
+      if (k.includes('jilid')) return 'JLD'
+      if (k.includes('ghorib')) return 'GR'
+      if (k.includes('tajwid')) return 'TJ'
+      return judul ? judul.substring(0, 3).toUpperCase() : '??'
+  }
+
+  // HELPER: FORMAT TANGGAL HEADER
+  const formatDateHeader = (dateStr: string) => {
+      return new Date(dateStr).toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'numeric' })
   }
 
   return (
     <div className="min-h-screen bg-slate-50 p-6 print:p-0 print:bg-white">
       
-      {/* HEADER NAVIGASI (TIDAK DICETAK) */}
+      {/* FILTER AREA */}
       <div className="max-w-6xl mx-auto mb-6 print:hidden">
         <div className="flex items-center gap-4 mb-6">
             <Link href="/" className="rounded-full bg-white p-2 text-slate-500 shadow-sm hover:text-blue-600"><ArrowLeft size={20}/></Link>
-            <h1 className="text-2xl font-bold text-slate-900">Laporan Mingguan</h1>
+            <h1 className="text-2xl font-bold text-slate-900">Laporan Jurnal Pekanan</h1>
         </div>
 
-        {/* FORM FILTER */}
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
             <form onSubmit={handleFilter} className="flex flex-col md:flex-row gap-4 items-end">
                 <div className="flex-1 w-full">
@@ -140,18 +164,18 @@ export default function LaporanPage() {
                     </select>
                 </div>
                 <div className="w-full md:w-40">
-                    <label className="block text-sm font-bold text-slate-700 mb-2">Dari Tanggal</label>
+                    <label className="block text-sm font-bold text-slate-700 mb-2">Mulai</label>
                     <input type="date" className="w-full p-2.5 border rounded-lg" value={startDate} onChange={e => setStartDate(e.target.value)} required />
                 </div>
                 <div className="w-full md:w-40">
-                    <label className="block text-sm font-bold text-slate-700 mb-2">Sampai Tanggal</label>
+                    <label className="block text-sm font-bold text-slate-700 mb-2">Sampai</label>
                     <input type="date" className="w-full p-2.5 border rounded-lg" value={endDate} onChange={e => setEndDate(e.target.value)} required />
                 </div>
                 <div className="flex gap-2">
                     <button type="submit" disabled={loading} className="bg-blue-600 text-white px-5 py-2.5 rounded-lg font-bold hover:bg-blue-700 flex items-center gap-2">
                         {loading ? <Loader2 className="animate-spin"/> : <Filter size={18}/>} Lihat
                     </button>
-                    {laporan.length > 0 && (
+                    {reportData.length > 0 && (
                         <button type="button" onClick={() => window.print()} className="bg-slate-800 text-white px-5 py-2.5 rounded-lg font-bold hover:bg-black flex items-center gap-2">
                             <Printer size={18}/> Cetak
                         </button>
@@ -161,110 +185,91 @@ export default function LaporanPage() {
         </div>
       </div>
 
-      {/* AREA KERTAS CETAK (LANDSCAPE ORIENTATION RECOMMENDED) */}
-      {laporan.length > 0 && (
-          <div className="max-w-[297mm] mx-auto bg-white shadow-lg print:shadow-none p-[10mm] min-h-[210mm] print:landscape">
+      {/* PRINT PREVIEW AREA */}
+      {reportData.length > 0 && (
+          <div className="max-w-[297mm] mx-auto bg-white shadow-lg print:shadow-none p-[5mm] print:p-0 min-h-[210mm] print:landscape">
                 
-                {/* 1. KOP SURAT */}
-                <div className="text-center border-b-2 border-black pb-4 mb-4">
-                    <h1 className="text-2xl font-bold uppercase">{instansi?.nama_instansi || 'NAMA INSTANSI'}</h1>
-                    <p className="text-sm">{instansi?.alamat}</p>
+                {/* 1. KOP SURAT (COMPACT) */}
+                <div className="text-center border-b-2 border-black pb-2 mb-2">
+                    <h1 className="text-xl font-bold uppercase">{instansi?.nama_instansi || 'NAMA INSTANSI'}</h1>
+                    <p className="text-xs">{instansi?.alamat}</p>
                 </div>
 
-                {/* 2. INFO HEADER LAPORAN */}
-                <div className="mb-4">
-                    <h2 className="text-center font-bold text-lg underline mb-4 uppercase">JURNAL PEMBELAJARAN AL-QURAN</h2>
-                    <table className="w-full text-sm font-medium">
-                        <tbody>
-                            <tr>
-                                <td className="w-32">Nama Kelompok</td>
-                                <td className="w-2">:</td>
-                                <td>{detailKelompok?.nama_kelompok}</td>
-                                <td className="w-32 text-right">Guru Pengampu</td>
-                                <td className="w-2">:</td>
-                                <td className="w-48">{detailKelompok?.users?.nama_lengkap || '-'}</td>
-                            </tr>
-                            <tr>
-                                <td>Rentang Tanggal</td>
-                                <td>:</td>
-                                <td>{new Date(startDate).toLocaleDateString('id-ID')} s/d {new Date(endDate).toLocaleDateString('id-ID')}</td>
-                                <td className="text-right">Tahun Ajaran</td>
-                                <td>:</td>
-                                <td>{new Date().getFullYear()}/{new Date().getFullYear()+1}</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                {/* 2. INFO HEADER */}
+                <div className="mb-2 flex justify-between items-end">
+                    <div className="text-sm font-bold">
+                        KELOMPOK: {detailKelompok?.nama_kelompok} <span className="font-normal mx-2">|</span> 
+                        GURU: {detailKelompok?.users?.nama_lengkap || '-'}
+                    </div>
+                    <div className="text-xs">
+                        Periode: {new Date(startDate).toLocaleDateString('id-ID')} s/d {new Date(endDate).toLocaleDateString('id-ID')}
+                    </div>
                 </div>
 
-                {/* 3. TABEL UTAMA (COMPLEX HEADER) */}
-                <table className="w-full border-collapse border border-black text-sm">
+                {/* 3. TABEL MATRIX (COMPACT) */}
+                <table className="w-full border-collapse border border-black text-[10px] leading-tight font-sans">
                     <thead>
                         <tr className="bg-slate-100 text-black font-bold text-center uppercase">
-                            <th rowSpan={2} className="border border-black p-2 w-10">No</th>
-                            <th rowSpan={2} className="border border-black p-2 w-28">Hari / Tgl</th>
-                            <th rowSpan={2} className="border border-black p-2">Nama Santri</th>
-                            {/* KOLOM TAHFIDZ */}
-                            <th colSpan={2} className="border border-black p-2 bg-blue-50">Tahfidz (Hafalan)</th>
-                            {/* KOLOM TAHSIN */}
-                            <th colSpan={2} className="border border-black p-2 bg-green-50">Tahsin / Materi</th>
-                        </tr>
-                        <tr className="bg-slate-50 text-black font-bold text-center text-xs uppercase">
-                            <th className="border border-black p-1 bg-blue-50">Surat & Ayat</th>
-                            <th className="border border-black p-1 w-12 bg-blue-50">Nilai</th>
-                            <th className="border border-black p-1 bg-green-50">Materi & Halaman</th>
-                            <th className="border border-black p-1 w-12 bg-green-50">Nilai</th>
+                            <th className="border border-black p-1 w-6">No</th>
+                            <th className="border border-black p-1 w-48 text-left">Nama Santri</th>
+                            {dateColumns.map(date => (
+                                <th key={date} className="border border-black p-1 w-24">
+                                    {formatDateHeader(date)}
+                                </th>
+                            ))}
                         </tr>
                     </thead>
                     <tbody>
-                        {laporan.map((row, idx) => (
-                            <tr key={idx} className="break-inside-avoid">
-                                <td className="border border-black p-2 text-center">{idx + 1}</td>
-                                <td className="border border-black p-2 text-center text-xs whitespace-nowrap">
-                                    {formatTanggalIndo(row.date)}
-                                </td>
-                                <td className="border border-black p-2 font-medium">
+                        {reportData.map((row, idx) => (
+                            <tr key={idx} className="break-inside-avoid hover:bg-slate-50">
+                                <td className="border border-black p-1 text-center align-top">{idx + 1}</td>
+                                <td className="border border-black p-1 align-top font-bold">
                                     {row.nama_siswa}
                                 </td>
-                                {/* ISI TAHFIDZ */}
-                                <td className="border border-black p-2 text-xs">
-                                    {row.tahfidz_materi}
-                                </td>
-                                <td className="border border-black p-2 text-center font-bold">
-                                    {row.tahfidz_nilai}
-                                </td>
-                                {/* ISI TAHSIN */}
-                                <td className="border border-black p-2 text-xs">
-                                    {row.tahsin_materi}
-                                </td>
-                                <td className="border border-black p-2 text-center font-bold">
-                                    {row.tahsin_nilai}
-                                </td>
+                                {dateColumns.map(date => {
+                                    const entries = row.entries[date] || []
+                                    return (
+                                        <td key={date} className="border border-black p-1 align-top h-12">
+                                            {entries.length > 0 ? (
+                                                <div className="space-y-1">
+                                                    {entries.map((ent: any, i: number) => (
+                                                        <div key={i} className="flex gap-1 border-b border-dotted border-slate-300 last:border-0 pb-0.5 mb-0.5">
+                                                            <span className="font-bold min-w-[20px] text-blue-800">{getKode(ent.kategori, ent.judul_target)}:</span>
+                                                            <span className="flex-1 truncate">{ent.capaian}</span>
+                                                            {ent.nilai && <span className="font-bold bg-slate-100 px-1 rounded border border-slate-300">{ent.nilai}</span>}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div className="text-center text-slate-200 text-xs">-</div>
+                                            )}
+                                        </td>
+                                    )
+                                })}
                             </tr>
                         ))}
-                        {laporan.length === 0 && (
-                            <tr>
-                                <td colSpan={7} className="p-8 text-center border border-black italic text-slate-500">
-                                    Tidak ada data pembelajaran pada rentang tanggal ini.
-                                </td>
-                            </tr>
-                        )}
                     </tbody>
                 </table>
 
                 {/* 4. FOOTER TANDA TANGAN */}
-                <div className="flex justify-between mt-8 text-sm break-inside-avoid">
-                    <div className="text-center w-64">
+                <div className="flex justify-between mt-6 text-xs break-inside-avoid px-8">
+                    <div className="text-center">
                         <p>Mengetahui,</p>
-                        <p>Kepala / Koordinator</p>
+                        <p>Koordinator</p>
                         <br/><br/><br/>
-                        <p className="font-bold border-b border-black inline-block min-w-[150px]">{instansi?.kepala_instansi || '.....................'}</p>
+                        <p className="font-bold underline">{instansi?.kepala_instansi || '.....................'}</p>
                     </div>
-                    <div className="text-center w-64">
+                    <div className="text-center">
                         <p>{instansi?.kota || 'Tempat'}, {new Date().toLocaleDateString('id-ID', {day:'numeric', month:'long', year:'numeric'})}</p>
                         <p>Guru Pengampu</p>
                         <br/><br/><br/>
-                        <p className="font-bold border-b border-black inline-block min-w-[150px]">{detailKelompok?.users?.nama_lengkap || '.....................'}</p>
+                        <p className="font-bold underline">{detailKelompok?.users?.nama_lengkap || '.....................'}</p>
                     </div>
+                </div>
+
+                {/* LEGEND / KETERANGAN KODE (Bawah Kiri) */}
+                <div className="mt-4 text-[9px] text-slate-500 border-t pt-1">
+                    <span className="font-bold">Ket:</span> TF=Tahfidz, MJ=Murajaah, ZD=Ziyadah, JLD=Jilid, TL=Tilawah, GR=Ghorib, TJ=Tajwid.
                 </div>
           </div>
       )}
