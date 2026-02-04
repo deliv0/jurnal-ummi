@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import Link from 'next/link'
-import { Plus, Upload, Search, Trash2, Edit, Loader2, FileSpreadsheet, X, Download, User } from 'lucide-react'
+import { Plus, Upload, Search, Trash2, Edit, Loader2, FileSpreadsheet, X, Download, RefreshCw } from 'lucide-react'
 import * as XLSX from 'xlsx' 
 
 export default function SiswaPage() {
@@ -99,7 +99,28 @@ export default function SiswaPage() {
       }
   }
 
-  // LOGIC IMPORT EXCEL
+  // --- LOGIC BARU: DOWNLOAD DATA EXISTING (UNTUK DIEDIT) ---
+  const handleDownloadData = () => {
+      // Kita export ID agar nanti saat upload ulang, sistem tahu ini update data lama
+      const exportData = siswa.map(s => ({
+          SYSTEM_ID: s.id, // JANGAN DIUBAH USER
+          NAMA: s.nama_siswa,
+          NIS: s.nis || '', // KOSONG JIKA BELUM ADA
+          GENDER: s.gender,
+          LEVEL_SAAT_INI: s.level?.nama || '',
+          KELOMPOK: s.kelompok?.nama_kelompok || ''
+      }))
+
+      const ws = XLSX.utils.json_to_sheet(exportData)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, "DataSiswa")
+      
+      // Nama file dengan tanggal agar tidak bingung
+      const fileName = `Data_Siswa_Update_${new Date().toISOString().slice(0,10)}.xlsx`
+      XLSX.writeFile(wb, fileName)
+  }
+
+  // --- LOGIC BARU: IMPORT CERDAS (INSERT / UPDATE) ---
   const handleFileUpload = async (e: any) => {
       const file = e.target.files[0]
       if (!file) return
@@ -112,24 +133,51 @@ export default function SiswaPage() {
           const ws = wb.Sheets[wsname]
           const data: any[] = XLSX.utils.sheet_to_json(ws)
 
-          if (confirm(`Ditemukan ${data.length} data siswa. Apakah yakin ingin import?`)) {
+          // Cek apakah ini file update (ada kolom SYSTEM_ID) atau file baru
+          const isUpdateMode = data.length > 0 && 'SYSTEM_ID' in data[0]
+
+          const confirmMsg = isUpdateMode 
+            ? `Ditemukan ${data.length} data dengan ID Sistem.\nMode: UPDATE DATA LAMA (Mengisi NIS/Edit Nama).\nLanjutkan?`
+            : `Ditemukan ${data.length} data baru.\nMode: TAMBAH SISWA BARU.\nLanjutkan?`
+
+          if (confirm(confirmMsg)) {
               setSubmitting(true)
               try {
-                  const payload = data.map(row => ({
-                      nama_siswa: row['Nama'] || row['nama'] || row['NAMA'],
-                      nis: row['NIS'] || row['nis'] || null, 
-                      gender: row['L/P'] === 'P' ? 'P' : 'L',
-                      status: 'aktif'
-                  }))
+                  if (isUpdateMode) {
+                      // --- MODE 1: UPDATE BULK ---
+                      let updatedCount = 0
+                      
+                      // Supabase belum support bulk update different values natively dengan mudah via client
+                      // Kita loop update (aman untuk 81 siswa, masih cepat)
+                      for (const row of data) {
+                          if (row.SYSTEM_ID) {
+                              await supabase.from('siswa').update({
+                                  nama_siswa: row['NAMA'],
+                                  nis: row['NIS'] ? String(row['NIS']) : null, // Pastikan string
+                                  gender: row['GENDER']
+                              }).eq('id', row.SYSTEM_ID)
+                              updatedCount++
+                          }
+                      }
+                      alert(`Berhasil memperbarui ${updatedCount} data siswa!`)
 
-                  const { error } = await supabase.from('siswa').insert(payload)
-                  if(error) throw error
+                  } else {
+                      // --- MODE 2: INSERT BULK (LAMA) ---
+                      const payload = data.map(row => ({
+                          nama_siswa: row['Nama'] || row['nama'] || row['NAMA'],
+                          nis: row['NIS'] || row['nis'] || null, 
+                          gender: row['L/P'] === 'P' ? 'P' : 'L',
+                          status: 'aktif'
+                      }))
+                      const { error } = await supabase.from('siswa').insert(payload)
+                      if(error) throw error
+                      alert("Import siswa baru berhasil!")
+                  }
 
-                  alert("Import berhasil!")
                   setShowImportModal(false)
                   fetchData()
               } catch (err: any) {
-                  alert("Gagal Import: " + err.message)
+                  alert("Gagal Proses: " + err.message)
               } finally {
                   setSubmitting(false)
               }
@@ -148,12 +196,17 @@ export default function SiswaPage() {
                 <h1 className="text-2xl font-bold text-slate-800">Data Santri</h1>
                 <p className="text-slate-500 text-sm">Total: {siswa.length} Santri Aktif</p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
+                {/* TOMBOL DOWNLOAD DATA (BARU) */}
+                <button onClick={handleDownloadData} className="px-4 py-2 bg-green-50 text-green-700 border border-green-200 rounded-lg font-bold text-sm flex items-center gap-2 hover:bg-green-100">
+                    <Download size={18}/> Backup / Edit Excel
+                </button>
+                
                 <button onClick={() => setShowImportModal(true)} className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg font-bold text-sm flex items-center gap-2 hover:bg-slate-50">
-                    <FileSpreadsheet size={18}/> Import Excel
+                    <FileSpreadsheet size={18}/> Upload / Import
                 </button>
                 <button onClick={() => setShowAddModal(true)} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold text-sm flex items-center gap-2 hover:bg-blue-700 shadow-md">
-                    <Plus size={18}/> Tambah Santri
+                    <Plus size={18}/> Tambah
                 </button>
             </div>
         </div>
@@ -273,12 +326,14 @@ export default function SiswaPage() {
           </div>
       )}
 
-      {/* MODAL IMPORT EXCEL */}
+      {/* MODAL IMPORT EXCEL (SMART) */}
       {showImportModal && (
           <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
               <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 text-center">
-                  <h2 className="text-xl font-bold text-slate-800 mb-2">Import Data Excel</h2>
-                  <p className="text-sm text-slate-500 mb-6">Pastikan file Excel (.xlsx) memiliki header kolom: <br/><strong>NAMA</strong>, <strong>NIS</strong>, dan <strong>L/P</strong></p>
+                  <h2 className="text-xl font-bold text-slate-800 mb-2">Upload Data Siswa</h2>
+                  <p className="text-sm text-slate-500 mb-6">
+                    Gunakan tombol <strong>Backup / Edit Excel</strong> untuk mendapatkan template data siswa yang sudah ada. Isi kolom NIS lalu upload kembali di sini.
+                  </p>
                   
                   <label className="block w-full border-2 border-dashed border-slate-300 rounded-xl p-8 cursor-pointer hover:bg-slate-50 hover:border-blue-400 transition-all">
                       <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="hidden" />
