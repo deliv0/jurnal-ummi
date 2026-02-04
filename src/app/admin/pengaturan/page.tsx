@@ -3,180 +3,163 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import Link from 'next/link'
-import { ArrowLeft, Save, Building, Loader2, CheckCircle, AlertCircle, Image as ImageIcon } from 'lucide-react'
-import { useRouter } from 'next/navigation'
+import { ArrowLeft, Save, Building, MapPin, User, Phone, Loader2 } from 'lucide-react'
 
 export default function PengaturanPage() {
   const supabase = createClient()
-  const router = useRouter()
-  
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState<{type: 'success'|'error', text: string} | null>(null)
   
-  // Default Values
-  const [formData, setFormData] = useState({
-    id: '',
-    nama_instansi: '',
-    alamat: '',
-    kota: '',
-    telepon: '',
-    email: '',
-    kepala_instansi: '',
-    nomor_induk_kepala: '',
-    logo_url: '' // <-- KOLOM BARU
+  const [form, setForm] = useState({
+      id: '',
+      nama_instansi: '',
+      alamat: '',
+      kota: '',
+      kepala_instansi: '',
+      no_telp: '',
+      email: ''
   })
 
-  // 1. LOAD DATA
   useEffect(() => {
-    const fetchData = async () => {
-      const { data } = await supabase.from('instansi').select('*').limit(1).single()
-      if (data) {
-        setFormData({
+    fetchData()
+  }, [])
+
+  const fetchData = async () => {
+    // Ambil data baris pertama saja (karena ini single row table)
+    const { data } = await supabase.from('instansi').select('*').limit(1).single()
+    if (data) {
+        setForm({
             id: data.id,
             nama_instansi: data.nama_instansi || '',
             alamat: data.alamat || '',
             kota: data.kota || '',
-            telepon: data.telepon || '',
-            email: data.email || '',
             kepala_instansi: data.kepala_instansi || '',
-            nomor_induk_kepala: data.nomor_induk_kepala || '',
-            logo_url: data.logo_url || ''
+            no_telp: data.no_telp || '',
+            email: data.email || ''
         })
-      }
-      setLoading(false)
     }
-    fetchData()
-  }, [])
+    setLoading(false)
+  }
 
-  // 2. HANDLE SIMPAN
   const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setSaving(true)
-    setMessage(null)
-
-    try {
-        let error = null
-        if (formData.id) {
-            const { error: err } = await supabase.from('instansi').update(formData).eq('id', formData.id)
-            error = err
-        } else {
-            const { error: err } = await supabase.from('instansi').insert(formData)
-            error = err
-        }
-
-        if (error) throw error
-        setMessage({ type: 'success', text: 'Identitas Sekolah berhasil diperbarui!' })
-        router.refresh()
-    } catch (err: any) {
-        setMessage({ type: 'error', text: err.message })
-    } finally {
-        setSaving(false)
-    }
+      e.preventDefault()
+      setSaving(true)
+      try {
+          const { error } = await supabase.from('instansi').upsert(form)
+          if (error) throw error
+          alert("Identitas instansi berhasil disimpan!")
+      } catch (err: any) {
+          alert("Gagal menyimpan: " + err.message)
+      } finally {
+          setSaving(false)
+      }
   }
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-      setFormData({ ...formData, [e.target.name]: e.target.value })
-  }
-
-  if (loading) return <div className="p-8 text-center"><Loader2 className="animate-spin mx-auto text-blue-600"/></div>
+  if (loading) return <div className="p-10 flex justify-center"><Loader2 className="animate-spin text-blue-600"/></div>
 
   return (
     <div className="min-h-screen bg-slate-50 p-6">
-      <div className="mx-auto max-w-3xl">
+      <div className="max-w-3xl mx-auto">
         
-        <div className="mb-6 flex items-center gap-4">
-          <Link href="/" className="rounded-full bg-white p-2 text-slate-500 shadow-sm hover:text-blue-600">
-            <ArrowLeft size={20}/>
-          </Link>
-          <div>
+        <div className="flex items-center gap-4 mb-6">
+            <Link href="/" className="rounded-full bg-white p-2 text-slate-500 shadow-sm hover:text-blue-600"><ArrowLeft size={20}/></Link>
             <h1 className="text-2xl font-bold text-slate-900">Identitas Sekolah</h1>
-            <p className="text-slate-500">Pengaturan data untuk Kop Surat & Raport</p>
-          </div>
         </div>
 
-        {message && (
-            <div className={`mb-4 p-4 rounded-md flex items-center gap-2 ${message.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                {message.type === 'success' ? <CheckCircle size={20}/> : <AlertCircle size={20}/>}
-                {message.text}
-            </div>
-        )}
-
-        <form onSubmit={handleSave} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="bg-blue-50 p-4 border-b border-blue-100 flex items-center gap-2 text-blue-800 font-semibold">
-                <Building size={20}/> Form Data Instansi
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-6 border-b border-slate-100 bg-slate-50/50">
+                <p className="text-sm text-slate-500">
+                    Data ini akan digunakan sebagai <strong>Kop Surat</strong> pada Laporan Jurnal, Slip Gaji, dan Raport Santri.
+                </p>
             </div>
             
-            <div className="p-6 space-y-6">
-                {/* LOGO URL */}
-                <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
-                    <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2">
-                        <ImageIcon size={16}/> Link Logo Sekolah (URL)
+            <form onSubmit={handleSave} className="p-6 space-y-6">
+                
+                {/* IDENTITAS UTAMA */}
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-bold text-slate-700 mb-1 flex items-center gap-2">
+                            <Building size={16} className="text-blue-500"/> Nama Instansi / TPQ
+                        </label>
+                        <input 
+                            type="text" required
+                            className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-bold text-lg"
+                            placeholder="Contoh: TPQ AL-HIDAYAH"
+                            value={form.nama_instansi}
+                            onChange={e => setForm({...form, nama_instansi: e.target.value})}
+                        />
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-1 flex items-center gap-2">
+                                <MapPin size={16} className="text-orange-500"/> Kota / Kabupaten
+                            </label>
+                            <input 
+                                type="text" required
+                                className="w-full p-3 border border-slate-300 rounded-lg"
+                                placeholder="Contoh: Sleman"
+                                value={form.kota}
+                                onChange={e => setForm({...form, kota: e.target.value})}
+                            />
+                            <p className="text-[10px] text-slate-400 mt-1">*Digunakan untuk tanggal surat (Sleman, 20 Feb 2024)</p>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-1 flex items-center gap-2">
+                                <Phone size={16} className="text-green-500"/> Kontak (Telp/Email)
+                            </label>
+                            <input 
+                                type="text"
+                                className="w-full p-3 border border-slate-300 rounded-lg"
+                                placeholder="Opsional"
+                                value={form.no_telp}
+                                onChange={e => setForm({...form, no_telp: e.target.value})}
+                            />
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-bold text-slate-700 mb-1">Alamat Lengkap</label>
+                        <textarea 
+                            required rows={3}
+                            className="w-full p-3 border border-slate-300 rounded-lg"
+                            placeholder="Jalan, RT/RW, Kelurahan, Kecamatan..."
+                            value={form.alamat}
+                            onChange={e => setForm({...form, alamat: e.target.value})}
+                        ></textarea>
+                    </div>
+                </div>
+
+                <hr className="border-slate-100"/>
+
+                {/* PENANDATANGAN */}
+                <div>
+                     <label className="block text-sm font-bold text-slate-700 mb-1 flex items-center gap-2">
+                        <User size={16} className="text-purple-500"/> Nama Kepala / Direktur
                     </label>
-                    <input name="logo_url" value={formData.logo_url} onChange={handleChange}
-                        className="w-full p-2 border border-slate-300 rounded-lg text-sm" 
-                        placeholder="https://website-sekolah.com/logo.png"/>
-                    <p className="text-xs text-slate-500 mt-1">
-                        *Masukkan link gambar logo (format .png/.jpg). Jika kosong, logo tidak akan muncul.
-                    </p>
+                    <input 
+                        type="text" required
+                        className="w-full p-3 border border-slate-300 rounded-lg"
+                        placeholder="Nama lengkap beserta gelar..."
+                        value={form.kepala_instansi}
+                        onChange={e => setForm({...form, kepala_instansi: e.target.value})}
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1">*Akan muncul di kolom tanda tangan laporan.</p>
                 </div>
 
-                {/* IDENTITAS UMUM */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="md:col-span-2">
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Nama Instansi / TPQ</label>
-                        <input name="nama_instansi" value={formData.nama_instansi} onChange={handleChange} required
-                            className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500" placeholder="TPQ AL-HIDAYAH"/>
-                    </div>
-
-                    <div className="md:col-span-2">
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Alamat Lengkap</label>
-                        <textarea name="alamat" value={formData.alamat} onChange={handleChange} rows={2}
-                            className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500" placeholder="Jl. Mawar No. 10..."/>
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Kota / Kabupaten</label>
-                        <input name="kota" value={formData.kota} onChange={handleChange}
-                            className="w-full p-2 border border-slate-300 rounded-lg" placeholder="Jakarta Selatan"/>
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Nomor Telepon</label>
-                        <input name="telepon" value={formData.telepon} onChange={handleChange}
-                            className="w-full p-2 border border-slate-300 rounded-lg" placeholder="0812-xxxx-xxxx"/>
-                    </div>
-                    
-                    <div className="md:col-span-2">
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Email Sekolah</label>
-                        <input name="email" value={formData.email} onChange={handleChange}
-                            className="w-full p-2 border border-slate-300 rounded-lg" placeholder="admin@sekolah.com"/>
-                    </div>
+                <div className="pt-4">
+                    <button 
+                        type="submit" 
+                        disabled={saving}
+                        className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl shadow-lg hover:bg-blue-700 flex justify-center items-center gap-2 transition-all active:scale-95"
+                    >
+                        {saving ? <Loader2 className="animate-spin"/> : <><Save size={20}/> SIMPAN PENGATURAN</>}
+                    </button>
                 </div>
 
-                <div className="border-t border-slate-100 pt-6">
-                    <h3 className="text-sm font-bold text-slate-900 mb-4 uppercase tracking-wider">Data Kepala Sekolah</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Nama Kepala TPQ</label>
-                            <input name="kepala_instansi" value={formData.kepala_instansi} onChange={handleChange}
-                                className="w-full p-2 border border-slate-300 rounded-lg" placeholder="H. Abdullah, Lc."/>
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">NIP / NIY (Opsional)</label>
-                            <input name="nomor_induk_kepala" value={formData.nomor_induk_kepala} onChange={handleChange}
-                                className="w-full p-2 border border-slate-300 rounded-lg" placeholder="12345678"/>
-                        </div>
-                    </div>
-                </div>
-            </div>
+            </form>
+        </div>
 
-            <div className="p-6 bg-slate-50 border-t border-slate-200">
-                <button type="submit" disabled={saving} className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg shadow-lg hover:bg-blue-700 active:scale-95 transition-all flex justify-center items-center gap-2">
-                    {saving ? <Loader2 className="animate-spin"/> : <><Save size={20}/> SIMPAN PENGATURAN</>}
-                </button>
-            </div>
-        </form>
       </div>
     </div>
   )
