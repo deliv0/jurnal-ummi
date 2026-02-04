@@ -3,7 +3,7 @@
 import { useState, useEffect, use } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import Link from 'next/link'
-import { ArrowLeft, Calendar, CheckCircle, XCircle, UserCheck, UserX, Loader2, Save, MoreHorizontal, Edit3 } from 'lucide-react'
+import { ArrowLeft, Calendar, CheckCircle, MoreHorizontal, Save, Loader2, Edit3, DollarSign, Wallet, MinusCircle, PlusCircle, AlertCircle } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 
 export default function KelompokDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -14,16 +14,20 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
   // STATE DATA
   const [kelompok, setKelompok] = useState<any>(null)
   const [siswaList, setSiswaList] = useState<any[]>([])
-  const [absensiMap, setAbsensiMap] = useState<Record<string, any>>({}) // Data absen hari ini
-  const [todayJurnalMap, setTodayJurnalMap] = useState<Record<string, boolean>>({}) // Siapa yang sudah setor hari ini
+  const [absensiMap, setAbsensiMap] = useState<Record<string, any>>({}) 
+  const [todayJurnalMap, setTodayJurnalMap] = useState<Record<string, boolean>>({}) 
 
   // STATE UI
   const [loading, setLoading] = useState(true)
-  const [viewMode, setViewMode] = useState<'absen' | 'belajar'>('belajar') // Default view
+  const [viewMode, setViewMode] = useState<'absen' | 'belajar'>('belajar') 
   const [saving, setSaving] = useState(false)
   
-  // STATE FORM ABSEN
-  const [formAbsen, setFormAbsen] = useState<Record<string, string>>({}) // { siswaId: 'hadir' | 'sakit' }
+  // STATE FORM ABSEN & PEMBAYARAN
+  const [formAbsen, setFormAbsen] = useState<Record<string, string>>({}) 
+  const [formBayar, setFormBayar] = useState<Record<string, { isPay: boolean, count: number }>>({})
+
+  // Harga Per Sesi
+  const HARGA_SESI = 5000 
 
   useEffect(() => {
     fetchData()
@@ -31,13 +35,13 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
 
   const fetchData = async () => {
     setLoading(true)
-    const today = new Date().toISOString().split('T')[0] // YYYY-MM-DD
+    const today = new Date().toISOString().split('T')[0] 
 
     // 1. Ambil Data Kelompok
     const { data: dataKelompok } = await supabase.from('kelompok').select('*').eq('id', id).single()
     if(dataKelompok) setKelompok(dataKelompok)
 
-    // 2. Ambil Siswa di Kelompok ini
+    // 2. Ambil Siswa (termasuk saldo_sesi)
     const { data: dataSiswa } = await supabase
         .from('siswa')
         .select('*, level(nama)')
@@ -48,156 +52,258 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
     if(dataSiswa) {
         setSiswaList(dataSiswa)
         
-        // Inisialisasi Form Absen Default (Semua Hadir)
+        // Init Form Absen & Bayar Default
         const initAbsen: Record<string, string> = {}
-        dataSiswa.forEach((s) => { initAbsen[s.id] = 'hadir' })
+        const initBayar: Record<string, any> = {}
+        
+        dataSiswa.forEach((s) => { 
+            initAbsen[s.id] = 'hadir' 
+            initBayar[s.id] = { isPay: true, count: 1 } 
+        })
         setFormAbsen(initAbsen)
+        setFormBayar(initBayar)
     }
 
-    // 3. Cek Apakah Sudah Absen Hari Ini?
-    const { data: dataAbsen } = await supabase
-        .from('absensi')
-        .select('*')
-        .eq('kelompok_id', id)
-        .eq('tanggal', today)
+    // 3. Cek Absen Hari Ini
+    const { data: dataAbsen } = await supabase.from('absensi').select('*').eq('kelompok_id', id).eq('tanggal', today)
     
     if (dataAbsen && dataAbsen.length > 0) {
-        // SUDAH ABSEN -> Masuk Mode Belajar
         setViewMode('belajar')
         const map: Record<string, any> = {}
         dataAbsen.forEach(a => map[a.siswa_id] = a.status)
         setAbsensiMap(map)
-        
-        // Sync Form Absen dengan data database (biar kalau diedit sesuai)
-        const existingForm: Record<string, string> = {}
-        dataSiswa?.forEach(s => {
-             existingForm[s.id] = map[s.id] || 'hadir'
-        })
-        setFormAbsen(existingForm)
-
     } else {
-        // BELUM ABSEN -> Masuk Mode Absen
         setViewMode('absen')
     }
 
-    // 4. Cek Siapa yang Sudah Setor Hafalan Hari Ini (Untuk Indikator)
-    // Kita cek jurnal_harian yang dibuat hari ini
+    // 4. Cek Progress Jurnal
     const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
-    const { data: jurnalToday } = await supabase
-        .from('jurnal_harian')
-        .select('siswa_target(siswa_id)')
-        .gte('created_at', startOfDay.toISOString())
-    
+    const { data: jurnalToday } = await supabase.from('jurnal_harian').select('siswa_target(siswa_id)').gte('created_at', startOfDay.toISOString())
     const jurnalMap: Record<string, boolean> = {}
-    jurnalToday?.forEach((j: any) => {
-        if(j.siswa_target?.siswa_id) jurnalMap[j.siswa_target.siswa_id] = true
-    })
+    jurnalToday?.forEach((j: any) => { if(j.siswa_target?.siswa_id) jurnalMap[j.siswa_target.siswa_id] = true })
     setTodayJurnalMap(jurnalMap)
 
     setLoading(false)
   }
 
-  // --- LOGIC SIMPAN ABSENSI ---
+  // --- LOGIC FORM HELPER ---
+  const toggleStatus = (siswaId: string, current: string) => {
+      const cycle = ['hadir', 'sakit', 'ijin', 'alpa']
+      const next = cycle[(cycle.indexOf(current) + 1) % cycle.length]
+      
+      setFormAbsen(prev => ({ ...prev, [siswaId]: next }))
+      
+      // Logic Otomatis: Jika TIDAK HADIR, matikan pembayaran
+      if (next !== 'hadir') {
+          setFormBayar(prev => ({ ...prev, [siswaId]: { ...prev[siswaId], isPay: false } }))
+      } else {
+          // Jika kembali HADIR, nyalakan pembayaran (default 1)
+          setFormBayar(prev => ({ ...prev, [siswaId]: { isPay: true, count: 1 } }))
+      }
+  }
+
+  // >>> FUNGSI INI WAJIB ADA <<<
+  const togglePay = (siswaId: string) => {
+      setFormBayar(prev => {
+          const current = prev[siswaId] || { isPay: false, count: 1 }
+          return { ...prev, [siswaId]: { ...current, isPay: !current.isPay } }
+      })
+  }
+
+  // >>> FUNGSI INI JUGA WAJIB ADA (YANG TADI ERROR) <<<
+  const setPayCount = (siswaId: string, count: number) => {
+      setFormBayar(prev => ({ 
+          ...prev, 
+          [siswaId]: { isPay: true, count: count } 
+      }))
+  }
+
+  // --- LOGIC SIMPAN (ABSENSI + KEUANGAN) ---
   const handleSaveAbsensi = async () => {
     setSaving(true)
     try {
         const { data: { user } } = await supabase.auth.getUser()
         const today = new Date().toISOString().split('T')[0]
 
-        // Siapkan Payload Insert/Upsert
-        const upsertData = siswaList.map(siswa => ({
+        // 1. Simpan Absensi
+        const upsertAbsen = siswaList.map(siswa => ({
             siswa_id: siswa.id,
             kelompok_id: id,
             tanggal: today,
             status: formAbsen[siswa.id] || 'hadir',
             user_id: user?.id
         }))
+        const { error: errAbsen } = await supabase.from('absensi').upsert(upsertAbsen, { onConflict: 'siswa_id, tanggal' })
+        if (errAbsen) throw errAbsen
 
-        // Upsert (Insert or Update on Conflict)
-        const { error } = await supabase
-            .from('absensi')
-            .upsert(upsertData, { onConflict: 'siswa_id, tanggal' })
-
-        if (error) throw error
-
-        // Refresh Data Local
-        const newMap: Record<string, any> = {}
-        upsertData.forEach(d => newMap[d.siswa_id] = d.status)
-        setAbsensiMap(newMap)
+        // 2. Simpan Pembayaran & Update Saldo
+        const paymentInserts: any[] = []
         
-        // Pindah ke Mode Belajar
+        for (const siswa of siswaList) {
+            const absenStatus = formAbsen[siswa.id]
+            const payData = formBayar[siswa.id]
+            const isHadir = absenStatus === 'hadir'
+            
+            let deltaSaldo = 0
+            if (isHadir) deltaSaldo -= 1 // Hadir mengurangi jatah
+            
+            if (payData && payData.isPay && payData.count > 0) {
+                const totalBayar = payData.count * HARGA_SESI
+                paymentInserts.push({
+                    tanggal: today,
+                    siswa_id: siswa.id,
+                    kelompok_id: id,
+                    guru_id: user?.id,
+                    jumlah_sesi: payData.count,
+                    nominal_per_sesi: HARGA_SESI,
+                    total_bayar: totalBayar,
+                    catatan: isHadir ? 'Bayar saat hadir' : 'Titip bayar'
+                })
+                deltaSaldo += payData.count // Bayar menambah deposit
+            }
+
+            // Update Saldo Siswa
+            if (deltaSaldo !== 0) {
+                const currentSaldo = siswa.saldo_sesi || 0
+                await supabase.from('siswa').update({ saldo_sesi: currentSaldo + deltaSaldo }).eq('id', siswa.id)
+            }
+        }
+
+        if (paymentInserts.length > 0) {
+            const { error: errPay } = await supabase.from('pembayaran').insert(paymentInserts)
+            if (errPay) throw errPay
+        }
+
         setViewMode('belajar')
+        fetchData() 
 
     } catch (err: any) {
-        alert('Gagal menyimpan absensi: ' + err.message)
+        alert('Gagal menyimpan: ' + err.message)
     } finally {
         setSaving(false)
     }
   }
 
-  // Helper ganti status di form
-  const toggleStatus = (siswaId: string, current: string) => {
-      const cycle = ['hadir', 'sakit', 'ijin', 'alpa']
-      const idx = cycle.indexOf(current)
-      const next = cycle[(idx + 1) % cycle.length]
-      setFormAbsen(prev => ({ ...prev, [siswaId]: next }))
-  }
-
   if (loading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600"/></div>
 
-  // --- TAMPILAN MODE 1: ABSENSI ---
+  // --- TAMPILAN MODE 1: ABSENSI & PEMBAYARAN ---
   if (viewMode === 'absen') {
       return (
-        <div className="min-h-screen bg-slate-50 pb-24">
+        <div className="min-h-screen bg-slate-50 pb-32">
             <header className="bg-white p-4 shadow-sm sticky top-0 z-10 border-b flex items-center gap-3">
                 <Link href="/" className="p-2 rounded-full hover:bg-slate-100 text-slate-500"><ArrowLeft size={20}/></Link>
                 <div>
-                    <h1 className="font-bold text-slate-800">Absensi Kelas</h1>
+                    <h1 className="font-bold text-slate-800">Absensi & Keuangan</h1>
                     <p className="text-xs text-slate-500">{kelompok?.nama_kelompok} • {new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long'})}</p>
                 </div>
             </header>
 
-            <main className="p-4 max-w-2xl mx-auto space-y-3">
-                <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 text-xs text-blue-700 mb-4 flex gap-2">
-                    <UserCheck size={16}/>
-                    Silakan cek kehadiran santri sebelum memulai pembelajaran. Tap pada status untuk mengubah.
+            <main className="p-4 max-w-3xl mx-auto space-y-4">
+                <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 text-xs text-blue-700 flex gap-2">
+                    <Wallet size={16}/>
+                    <div>
+                        <p className="font-bold">Info Pembayaran:</p>
+                        <p>Klik tombol <strong>Rp</strong> untuk mencatat pembayaran. Pilih angka jumlah sesi yang dibayar.</p>
+                    </div>
                 </div>
 
                 {siswaList.map((siswa) => {
                     const status = formAbsen[siswa.id] || 'hadir'
-                    let colorClass = 'bg-white border-slate-200'
-                    let textClass = 'text-slate-600'
-                    
-                    if(status === 'hadir') { colorClass = 'bg-green-50 border-green-200'; textClass = 'text-green-700' }
-                    if(status === 'sakit') { colorClass = 'bg-yellow-50 border-yellow-200'; textClass = 'text-yellow-700' }
-                    if(status === 'ijin') { colorClass = 'bg-blue-50 border-blue-200'; textClass = 'text-blue-700' }
-                    if(status === 'alpa') { colorClass = 'bg-red-50 border-red-200'; textClass = 'text-red-700' }
+                    const pay = formBayar[siswa.id] || { isPay: false, count: 1 }
+                    const saldo = siswa.saldo_sesi || 0
+                    const isTunggakan = saldo < 0
 
                     return (
-                        <div key={siswa.id} 
-                            onClick={() => toggleStatus(siswa.id, status)}
-                            className={`p-4 rounded-xl border flex justify-between items-center cursor-pointer transition-all active:scale-95 ${colorClass}`}
-                        >
-                            <div>
-                                <div className={`font-bold ${textClass}`}>{siswa.nama_siswa}</div>
-                                <div className="text-xs opacity-70 uppercase tracking-wider font-semibold">{status}</div>
+                        <div key={siswa.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            {/* BARIS ATAS: NAMA & STATUS KEHADIRAN */}
+                            <div className="p-4 flex justify-between items-center border-b border-slate-100">
+                                <div>
+                                    <div className="font-bold text-slate-800 text-lg">{siswa.nama_siswa}</div>
+                                    <div className="flex items-center gap-2 mt-1">
+                                        {isTunggakan ? (
+                                            <span className="text-xs font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded-full border border-red-100 flex items-center gap-1">
+                                                <AlertCircle size={10}/> Tunggakan: {Math.abs(saldo)}x
+                                            </span>
+                                        ) : saldo > 0 ? (
+                                            <span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded-full border border-green-100">
+                                                Deposit: {saldo}x
+                                            </span>
+                                        ) : (
+                                            <span className="text-xs text-slate-400">Lunas / Impas</span>
+                                        )}
+                                    </div>
+                                </div>
+                                <button 
+                                    onClick={() => toggleStatus(siswa.id, status)}
+                                    className={`px-4 py-2 rounded-lg font-bold text-sm uppercase tracking-wider transition-all border ${
+                                        status === 'hadir' ? 'bg-green-100 text-green-700 border-green-200' :
+                                        status === 'sakit' ? 'bg-yellow-100 text-yellow-700 border-yellow-200' :
+                                        status === 'ijin' ? 'bg-blue-100 text-blue-700 border-blue-200' :
+                                        'bg-red-100 text-red-700 border-red-200'
+                                    }`}
+                                >
+                                    {status}
+                                </button>
                             </div>
-                            <div className="h-8 w-8 rounded-full bg-white/50 flex items-center justify-center">
-                                {status === 'hadir' ? <CheckCircle size={20} className="text-green-600"/> : <MoreHorizontal size={20} className="text-slate-400"/>}
+
+                            {/* BARIS BAWAH: PANEL PEMBAYARAN */}
+                            <div className={`p-3 flex items-center gap-3 transition-colors ${pay.isPay ? 'bg-blue-50/50' : 'bg-slate-50'}`}>
+                                <button 
+                                    onClick={() => togglePay(siswa.id)}
+                                    disabled={status !== 'hadir'} 
+                                    className={`h-10 w-10 rounded-full flex items-center justify-center border transition-all ${
+                                        pay.isPay 
+                                        ? 'bg-blue-600 text-white border-blue-600 shadow-md' 
+                                        : 'bg-white text-slate-300 border-slate-200 hover:border-slate-300'
+                                    } ${status !== 'hadir' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                >
+                                    <DollarSign size={20}/>
+                                </button>
+
+                                {pay.isPay ? (
+                                    <div className="flex-1 flex items-center gap-2 animate-in slide-in-from-left-2">
+                                        <div className="flex bg-white rounded-lg border border-blue-200 shadow-sm overflow-hidden">
+                                            {[1, 2, 3, 4, 5, 20].map(num => (
+                                                <button 
+                                                    key={num}
+                                                    onClick={() => setPayCount(siswa.id, num)}
+                                                    className={`px-3 py-2 text-sm font-bold border-r border-slate-100 last:border-0 transition-colors ${
+                                                        pay.count === num ? 'bg-blue-600 text-white' : 'hover:bg-slate-50 text-slate-600'
+                                                    }`}
+                                                >
+                                                    {num}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        <input 
+                                            type="number" 
+                                            value={pay.count}
+                                            onChange={(e) => setPayCount(siswa.id, Number(e.target.value))}
+                                            className="w-14 p-2 text-center font-bold text-sm border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                        />
+                                        <span className="text-xs font-bold text-blue-700">
+                                            x Rp {HARGA_SESI/1000}k
+                                        </span>
+                                    </div>
+                                ) : (
+                                    <span className="text-xs text-slate-400 italic">
+                                        {status === 'hadir' ? 'Tidak ada pembayaran' : 'Tidak hadir'}
+                                    </span>
+                                )}
                             </div>
                         </div>
                     )
                 })}
             </main>
 
-            <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t">
-                <div className="max-w-2xl mx-auto">
+            <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t z-20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+                <div className="max-w-3xl mx-auto">
                     <button 
                         onClick={handleSaveAbsensi} 
                         disabled={saving}
-                        className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-blue-200 flex justify-center items-center gap-2 hover:bg-blue-700 transition-all"
+                        className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-blue-200 flex justify-center items-center gap-2 hover:bg-blue-700 transition-all active:scale-95"
                     >
-                        {saving ? <Loader2 className="animate-spin"/> : <><Save size={20}/> SIMPAN & MULAI BELAJAR</>}
+                        {saving ? <Loader2 className="animate-spin"/> : <><Save size={20}/> SIMPAN ABSEN & KEUANGAN</>}
                     </button>
                 </div>
             </div>
@@ -206,7 +312,6 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
   }
 
   // --- TAMPILAN MODE 2: BELAJAR (LIST SISWA HADIR) ---
-  // Filter siswa: Hanya tampilkan yang HADIR, atau tampilkan semua tapi yang tidak hadir disable/beda warna
   const presentStudents = siswaList.filter(s => absensiMap[s.id] === 'hadir')
   const absentStudents = siswaList.filter(s => absensiMap[s.id] !== 'hadir')
 
@@ -251,13 +356,12 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
         </div>
 
         <main className="px-4 -mt-6 max-w-2xl mx-auto space-y-4 relative z-20">
-            
-            {/* LIST SISWA HADIR */}
             {presentStudents.length > 0 ? (
                 <div className="space-y-3">
                     {presentStudents.map(siswa => {
                         const isDone = todayJurnalMap[siswa.id]
-
+                        const saldo = siswa.saldo_sesi || 0
+                        
                         return (
                             <Link key={siswa.id} href={`/kelompok/${id}/siswa/${siswa.id}`} className="block">
                                 <div className={`bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between group transition-all hover:shadow-md hover:border-blue-200
@@ -271,10 +375,12 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
                                         </div>
                                         <div>
                                             <h3 className={`font-bold ${isDone ? 'text-slate-800' : 'text-slate-700'}`}>{siswa.nama_siswa}</h3>
-                                            <p className="text-xs text-slate-500">{siswa.level?.nama || 'Tanpa Level'}</p>
+                                            <div className="flex items-center gap-2">
+                                                <p className="text-xs text-slate-500">{siswa.level?.nama || 'Tanpa Level'}</p>
+                                                {saldo < 0 && <span className="text-[10px] bg-red-100 text-red-600 px-1.5 rounded font-bold">Hutang {Math.abs(saldo)}x</span>}
+                                            </div>
                                         </div>
                                     </div>
-                                    
                                     {isDone ? (
                                         <div className="px-3 py-1 bg-green-50 text-green-700 text-[10px] font-bold rounded-full border border-green-100 flex items-center gap-1">
                                             <CheckCircle size={12}/> Selesai
@@ -295,7 +401,6 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
                 </div>
             )}
 
-            {/* LIST SISWA TIDAK HADIR (Collapsed/Bottom) */}
             {absentStudents.length > 0 && (
                 <div className="pt-4">
                     <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 ml-2">Tidak Hadir ({absentStudents.length})</h3>
@@ -311,7 +416,6 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
                     </div>
                 </div>
             )}
-
         </main>
     </div>
   )
