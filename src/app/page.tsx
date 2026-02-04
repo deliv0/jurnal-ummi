@@ -17,7 +17,8 @@ import {
   Activity, 
   Shield, 
   Settings,
-  FileText // Icon untuk Laporan
+  FileText,
+  UserCheck
 } from 'lucide-react'
 
 // Agar greeting sesuai waktu user (Server Time -> WIB)
@@ -35,7 +36,6 @@ export default async function Dashboard() {
   const isAdmin = userProfile?.roles && JSON.stringify(userProfile.roles).includes('admin')
 
   // LOGIC SAPAAN WAKTU (WIB)
-  // Kita paksa server time convert ke Asia/Jakarta untuk akurasi
   const now = new Date()
   const wibHour = Number(now.toLocaleTimeString('en-US', { hour: 'numeric', hour12: false, timeZone: 'Asia/Jakarta' }))
   
@@ -61,8 +61,7 @@ export default async function Dashboard() {
     const { count: countKelompok } = await supabase.from('kelompok').select('*', { count: 'exact', head: true })
     const { count: countUjian } = await supabase.from('siswa').select('*', { count: 'exact', head: true }).eq('status_tes', 'siap_tes')
     
-    // Hitung Jurnal Hari Ini (WIB)
-    const todayStart = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' }) // YYYY-MM-DD
+    const todayStart = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' }) 
     const { count: countJurnal } = await supabase.from('jurnal_harian').select('*', { count: 'exact', head: true }).gte('created_at', todayStart)
 
     // A. Distribusi Level
@@ -97,12 +96,15 @@ export default async function Dashboard() {
     }
   }
 
-  // DATA GURU (Jadwal)
-  const { data: kelompokList } = await supabase
+  // --- DATA KELOMPOK (FETCH ALL UNTUK FITUR BADAL) ---
+  const { data: allKelompok } = await supabase
     .from('kelompok')
-    .select('*')
-    .eq('guru_utama_id', user.id)
+    .select('*, users!guru_utama_id(nama_lengkap)')
     .order('nama_kelompok', { ascending: true })
+
+  // Pisahkan: Kelas Saya vs Kelas Lain
+  const myGroups = allKelompok?.filter((k: any) => k.guru_utama_id === user.id) || []
+  const otherGroups = allKelompok?.filter((k: any) => k.guru_utama_id !== user.id) || []
 
   // Action Logout
   const signOut = async () => {
@@ -160,7 +162,6 @@ export default async function Dashboard() {
         {/* --- DASHBOARD ADMIN --- */}
         {isAdmin && (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                
                 {/* 1. KEY METRICS */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <StatCard icon={<Users/>} label="Total Santri" value={stats.totalSiswa} sub="Aktif" color="blue" />
@@ -187,7 +188,6 @@ export default async function Dashboard() {
 
                 {/* 2. SPLIT VIEW */}
                 <div className="grid lg:grid-cols-3 gap-6">
-                    
                     {/* LEFT: ACTIVITY FEED */}
                     <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-full">
                         <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
@@ -222,15 +222,10 @@ export default async function Dashboard() {
                                 <div className="p-8 text-center text-slate-400 text-sm">Belum ada aktivitas hari ini.</div>
                             )}
                         </div>
-                        <div className="p-3 bg-slate-50 border-t border-slate-100 text-center">
-                            <Link href="/admin/kelompok" className="text-xs font-medium text-blue-600 hover:underline">Lihat semua kelompok &rarr;</Link>
-                        </div>
                     </div>
 
                     {/* RIGHT: SHORTCUTS & CHART */}
                     <div className="lg:col-span-2 space-y-6">
-                        
-                        {/* Shortcuts Grid */}
                         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                             <h3 className="font-semibold text-slate-800 mb-4 text-sm uppercase tracking-wider text-slate-400">Menu Manajemen</h3>
                             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-4">
@@ -238,14 +233,13 @@ export default async function Dashboard() {
                                 <ShortcutItem href="/admin/kelompok" icon={<Users/>} label="Kelompok" color="purple"/>
                                 <ShortcutItem href="/admin/siswa" icon={<GraduationCap/>} label="Data Santri" color="indigo"/>
                                 <ShortcutItem href="/admin/ujian" icon={<ClipboardCheck/>} label="Ujian" color="orange"/>
-                                
-                                <ShortcutItem href="/admin/laporan" icon={<FileText/>} label="Laporan" color="green"/> {/* TOMBOL BARU */}
-                                <ShortcutItem href="/admin/users" icon={<Shield/>} label="User / Guru" color="red"/>
+                                <ShortcutItem href="/admin/laporan" icon={<FileText/>} label="Laporan" color="green"/>
+                                <ShortcutItem href="/admin/keuangan" icon={<Users/>} label="Keuangan" color="red"/> {/* UPDATE LINK */}
+                                <ShortcutItem href="/admin/users" icon={<Shield/>} label="User / Guru" color="slate"/>
                                 <ShortcutItem href="/admin/pengaturan" icon={<Settings/>} label="Identitas" color="slate"/>
                             </div>
                         </div>
 
-                        {/* Chart Level */}
                         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                             <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2">
                                 <BarChart3 size={18} className="text-slate-400"/> Distribusi Level Santri
@@ -271,23 +265,22 @@ export default async function Dashboard() {
                                 )}
                             </div>
                         </div>
-
                     </div>
                 </div>
             </div>
         )}
 
-        {/* --- SCHEDULE SECTION (GURU) --- */}
+        {/* --- JADWAL SAYA (UTAMA) --- */}
         <div>
              <div className="mb-4 flex items-center justify-between">
                 <div>
-                    <h2 className="text-lg font-bold text-slate-900">Jadwal Mengajar</h2>
+                    <h2 className="text-lg font-bold text-slate-900">Jadwal Mengajar Saya</h2>
                 </div>
             </div>
 
             <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {kelompokList && kelompokList.length > 0 ? (
-                kelompokList.map((item) => (
+            {myGroups.length > 0 ? (
+                myGroups.map((item: any) => (
                 <Link
                     key={item.id}
                     href={`/kelompok/${item.id}`}
@@ -319,6 +312,54 @@ export default async function Dashboard() {
             )}
             </div>
         </div>
+
+        {/* --- MENU BADAL (KELAS LAIN) --- */}
+        {otherGroups.length > 0 && (
+            <details className="group pt-4 border-t border-slate-200">
+                <summary className="flex items-center gap-2 cursor-pointer text-slate-500 hover:text-blue-600 font-semibold select-none list-none">
+                     <span className="p-1 bg-slate-100 rounded group-open:bg-blue-100 group-open:text-blue-600 transition-colors"><ChevronRight size={18} className="transition-transform group-open:rotate-90"/></span>
+                     <span>Gantikan Guru Lain (Badal)</span>
+                     <span className="text-xs bg-slate-100 px-2 py-0.5 rounded-full text-slate-500">{otherGroups.length} Kelas</span>
+                </summary>
+                
+                <div className="mt-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                    <div className="flex gap-2 mb-4 text-xs text-orange-600 bg-orange-50 p-2 rounded border border-orange-100 items-start">
+                        <UserCheck size={16} className="mt-0.5 shrink-0"/>
+                        <p><strong>Mode Badal:</strong> Anda akan masuk ke kelas guru lain. Honor sesi ini akan tercatat atas nama Anda sebagai Guru Pengganti.</p>
+                    </div>
+
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                        {otherGroups.map((item: any) => (
+                            <Link
+                                key={item.id}
+                                href={`/kelompok/${item.id}`}
+                                className="block rounded-lg border border-slate-200 bg-white p-4 hover:border-orange-400 hover:shadow-md transition-all opacity-80 hover:opacity-100"
+                            >
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-3">
+                                        <div className="h-8 w-8 rounded-md bg-slate-100 flex items-center justify-center text-slate-500 font-bold text-sm">
+                                            {item.nama_kelompok.charAt(0)}
+                                        </div>
+                                        <div>
+                                            <h3 className="font-bold text-slate-800 text-sm">
+                                            {item.nama_kelompok}
+                                            </h3>
+                                            <p className="text-[10px] text-slate-500 flex items-center gap-1">
+                                                Guru Utama: <span className="font-bold">{item.users?.nama_lengkap || '-'}</span>
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="text-[10px] font-bold bg-orange-50 text-orange-600 px-2 py-1 rounded">
+                                        BADAL
+                                    </div>
+                                </div>
+                            </Link>
+                        ))}
+                    </div>
+                </div>
+            </details>
+        )}
+
       </main>
     </div>
   )
