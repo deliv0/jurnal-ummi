@@ -38,7 +38,7 @@ export default function LaporanPage() {
     fetchMaster()
   }, [])
 
-  // FUNGSI UTAMA: BUILD MATRIX
+  // FUNGSI UTAMA: BUILD MATRIX (PERBAIKAN LOGIC)
   const handleFilter = async (e?: any) => {
     if(e) e.preventDefault()
     if(!selectedKelompok) return
@@ -49,10 +49,8 @@ export default function LaporanPage() {
     const detail = kelompokList.find(k => k.id === selectedKelompok)
     setDetailKelompok(detail)
 
-    // Generate Array Tanggal (Senin s/d Jumat)
-    // --- PERBAIKAN DI SINI: Menambahkan tipe data string[] ---
-    const dates: string[] = [] 
-    
+    // Generate Array Tanggal (String YYYY-MM-DD)
+    const dates: string[] = []
     let currentDate = new Date(startDate)
     const stopDate = new Date(endDate)
     while (currentDate <= stopDate) {
@@ -61,7 +59,7 @@ export default function LaporanPage() {
     }
     setDateColumns(dates)
 
-    // 2. Ambil Semua Siswa di Kelompok (Termasuk yg tidak masuk agar absen tetap ada)
+    // 2. Ambil Siswa di Kelompok ini
     const { data: listSiswa } = await supabase
         .from('siswa')
         .select('id, nama_siswa, nis')
@@ -69,9 +67,17 @@ export default function LaporanPage() {
         .eq('status', 'aktif')
         .order('nama_siswa')
 
-    if (!listSiswa) { setLoading(false); return; }
+    if (!listSiswa || listSiswa.length === 0) { 
+        setReportData([])
+        setLoading(false); 
+        return; 
+    }
 
-    // 3. Ambil Jurnal di Rentang Tanggal
+    // Ambil array ID siswa untuk filter jurnal
+    const siswaIds = listSiswa.map(s => s.id)
+
+    // 3. Ambil Jurnal (Query Lebih Sederhana & Aman)
+    // Kita filter berdasarkan siswa_id yang ada di dalam listSiswa, bukan filter kelompok deep nested
     const { data: rawJurnal } = await supabase
         .from('jurnal_harian')
         .select(`
@@ -81,7 +87,7 @@ export default function LaporanPage() {
                 target_pembelajaran ( judul, kategori_target )
             )
         `)
-        .eq('siswa_target.siswa.kelompok_id', selectedKelompok)
+        .in('siswa_target.siswa_id', siswaIds) // FILTER KUNCI: Hanya ambil punya siswa di kelas ini
         .gte('created_at', startDate)
         .lte('created_at', endDate + 'T23:59:59')
         .order('created_at')
@@ -92,22 +98,26 @@ export default function LaporanPage() {
             id: siswa.id,
             nama_siswa: siswa.nama_siswa,
             nis: siswa.nis,
-            entries: {} // Key: Tanggal, Value: Array of Jurnal
+            entries: {} 
         }
 
-        // Inisialisasi setiap tanggal dengan array kosong
         dates.forEach(d => row.entries[d] = [])
 
-        // Isi dengan data jurnal jika ada
         if (rawJurnal) {
             rawJurnal.forEach((j: any) => {
-                const jDate = j.created_at.split('T')[0]
+                // Konversi tanggal DB (UTC) ke Tanggal Lokal YYYY-MM-DD
+                // Agar data jam 01:00 pagi tetap masuk ke hari yang sama
+                const dbDate = new Date(j.created_at)
+                // Teknik aman ambil YYYY-MM-DD lokal
+                const localDateStr = j.created_at.slice(0, 10) 
+                
                 const jSiswaId = j.siswa_target.siswa_id
                 
-                if (jSiswaId === siswa.id && row.entries[jDate]) {
-                    row.entries[jDate].push({
-                        kategori: j.siswa_target.target_pembelajaran.kategori_target || 'umum',
-                        judul_target: j.siswa_target.target_pembelajaran.judul,
+                // Pastikan ID Siswa cocok DAN Tanggal ada di kolom header
+                if (jSiswaId === siswa.id && row.entries[localDateStr]) {
+                    row.entries[localDateStr].push({
+                        kategori: j.siswa_target.target_pembelajaran?.kategori_target || 'umum',
+                        judul_target: j.siswa_target.target_pembelajaran?.judul || 'Target',
                         capaian: j.halaman_ayat,
                         nilai: j.nilai
                     })
