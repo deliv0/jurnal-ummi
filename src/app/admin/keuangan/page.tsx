@@ -47,7 +47,6 @@ export default function KeuanganPage() {
         .lte('tanggal', endDate)
 
     // 3. Ambil Data Absensi (DISTRIBUSI KERJA)
-    // Ambil distinct (tanggal + kelompok) untuk menghitung total sesi
     const { data: listAbsen } = await supabase
         .from('absensi')
         .select('tanggal, kelompok_id, user_id')
@@ -63,15 +62,13 @@ export default function KeuanganPage() {
     }
 
     // --- LOGIC: AVERAGE SESSION VALUE ---
-    
-    // Init Dompet Guru
     const salaryMap: Record<string, any> = {}
     listGuru.forEach(g => {
         salaryMap[g.id] = { 
             id: g.id, 
             nama: g.nama_lengkap, 
-            honor_utama: 0,    // Gaji dari kelas sendiri
-            honor_badal: 0,    // Gaji dari menggantikan orang
+            honor_utama: 0,
+            honor_badal: 0,
             sesi_utama: 0,
             sesi_badal: 0,
             total_terima: 0
@@ -80,36 +77,25 @@ export default function KeuanganPage() {
 
     let totalOmsetSemua = 0
 
-    // PROSES PER KELOMPOK
     listKelompok.forEach(k => {
-        // A. Hitung Total Omset Kelompok Bulan Ini
         const omsetKelompok = rawBayar
             .filter(b => b.kelompok_id === k.id)
             .reduce((sum, b) => sum + (b.total_bayar || 0), 0)
         
         totalOmsetSemua += omsetKelompok
 
-        // B. Hitung Total Sesi (Hari Efektif) Kelompok Ini
-        // Filter absen milik kelompok ini, lalu ambil unik tanggalnya
         const sesiUnik = new Set(
             listAbsen.filter(a => a.kelompok_id === k.id).map(a => `${a.tanggal}_${a.user_id}`)
         )
-        // Array unik sesi: [{tanggal, pengajar_id}]
         const sesiList = Array.from(sesiUnik).map(s => {
             const [tgl, uid] = s.split('_')
             return { tanggal: tgl, pengajar_id: uid }
         })
         
         const jumlahSesi = sesiList.length
-
-        // C. Hitung Nilai Per Sesi (Fair Share)
-        // Jika tidak ada sesi tapi ada uang masuk (aneh, tapi bisa jadi titipan), simpan di guru utama.
-        // Jika ada sesi, bagi rata.
-        
-        const hakGuruTotal = omsetKelompok * 0.40 // 40%
+        const hakGuruTotal = omsetKelompok * 0.40
         const honorPerSesi = jumlahSesi > 0 ? (hakGuruTotal / jumlahSesi) : 0
 
-        // D. Distribusi ke Pengajar (Sesuai Absensi)
         sesiList.forEach(sesi => {
             const pengajarId = sesi.pengajar_id
             const isGuruUtama = pengajarId === k.guru_utama_id
@@ -122,15 +108,10 @@ export default function KeuanganPage() {
                     salaryMap[pengajarId].honor_badal += honorPerSesi
                     salaryMap[pengajarId].sesi_badal += 1
                 }
-            } else {
-                // Case: Admin/User lain yg mengajar tapi tidak ada di listGuru
-                // Uang tetap dihitung tapi mungkin tidak tampil di tabel guru.
-                // Idealnya masukkan ke "Unknown/Admin"
             }
         })
 
-        // Case Khusus: Jika ada omset tapi TIDAK ADA SESI sama sekali (Libur full tapi ada yg bayar SPP)
-        // Berikan semua ke Guru Utama
+        // Case: Libur tapi ada omset
         if (jumlahSesi === 0 && hakGuruTotal > 0 && k.guru_utama_id) {
              if (salaryMap[k.guru_utama_id]) {
                  salaryMap[k.guru_utama_id].honor_utama += hakGuruTotal
@@ -138,7 +119,6 @@ export default function KeuanganPage() {
         }
     })
 
-    // Finalisasi
     const finalReport = Object.values(salaryMap)
         .map((s: any) => ({
             ...s,
@@ -161,6 +141,17 @@ export default function KeuanganPage() {
   return (
     <div className="min-h-screen bg-slate-50 p-6 print:p-0 print:bg-white">
       
+      {/* --- INJEKSI CSS KHUSUS PRINT --- */}
+      <style type="text/css" media="print">
+        {`
+           @page { size: auto; margin: 0mm; }
+           body { visibility: hidden; background-color: white; }
+           .printable-area { visibility: visible; position: absolute; top: 0; left: 0; width: 100%; margin: 0; padding: 20px; background-color: white; }
+           /* Sembunyikan elemen non-penting lainnya */
+           header, nav, footer, .no-print { display: none !important; }
+        `}
+      </style>
+
       {/* FILTER AREA */}
       <div className="max-w-5xl mx-auto mb-6 print:hidden">
         <div className="flex items-center gap-4 mb-6">
@@ -204,7 +195,6 @@ export default function KeuanganPage() {
                         required
                     />
                 </div>
-                {/* INPUT TARIF BADAL DIHAPUS KARENA SUDAH OTOMATIS */}
                 <div className="flex-1 text-xs text-slate-500 pb-2">
                     *Honor badal dihitung otomatis berdasarkan rata-rata omset per sesi pada kelas yang digantikan.
                 </div>
@@ -223,8 +213,9 @@ export default function KeuanganPage() {
       </div>
 
       {/* HASIL LAPORAN (SLIP GAJI VIEW) */}
+      {/* Tambahkan Class "printable-area" di sini */}
       {laporan.length > 0 && (
-          <div className="max-w-[210mm] mx-auto bg-white shadow-lg print:shadow-none p-[10mm] min-h-[297mm]">
+          <div className="printable-area max-w-[210mm] mx-auto bg-white shadow-lg print:shadow-none p-[10mm] min-h-[297mm]">
                 
                 {/* KOP SURAT */}
                 <div className="text-center border-b-2 border-slate-800 pb-4 mb-6">
