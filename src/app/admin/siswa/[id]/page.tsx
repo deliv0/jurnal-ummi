@@ -19,6 +19,9 @@ export default function EditSiswaPage({ params }: { params: Promise<{ id: string
   const [levels, setLevels] = useState<any[]>([])
   const [kelompoks, setKelompoks] = useState<any[]>([])
 
+  // State untuk deteksi perubahan level
+  const [originalLevelId, setOriginalLevelId] = useState<string | null>(null)
+
   // Form Data
   const [formData, setFormData] = useState({
     nama_siswa: '',
@@ -49,37 +52,79 @@ export default function EditSiswaPage({ params }: { params: Promise<{ id: string
             kelompok_id: siswa.kelompok_id || '',
             status: siswa.status || 'aktif'
         })
+        // Simpan level asli untuk perbandingan nanti
+        setOriginalLevelId(siswa.current_level_id)
       }
       setLoading(false)
     }
     initData()
   }, [id])
 
+  // --- LOGIC SYNC TARGET BARU ---
+  const syncTargets = async (levelId: string) => {
+      // 1. Hapus Target Lama (Reset)
+      await supabase.from('siswa_target').delete().eq('siswa_id', id)
+
+      // 2. Ambil Template Target Baru
+      const { data: masterTargets } = await supabase
+        .from('target_pembelajaran')
+        .select('id')
+        .eq('level_id', levelId)
+      
+      if (masterTargets && masterTargets.length > 0) {
+          // 3. Masukkan Target Baru
+          const newTargets = masterTargets.map(t => ({
+              siswa_id: id,
+              target_ref_id: t.id,
+              status: 'active'
+          }))
+          await supabase.from('siswa_target').insert(newTargets)
+      }
+  }
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
     setSaving(true)
     
-    // Logic Update
-    const { error } = await supabase
-        .from('siswa')
-        .update({
-            nama_siswa: formData.nama_siswa,
-            nis: formData.nis,
-            gender: formData.gender,
-            current_level_id: formData.level_id || null,
-            kelompok_id: formData.kelompok_id || null,
-            status: formData.status
-        })
-        .eq('id', id)
+    try {
+        // 1. Update Data Siswa
+        const { error } = await supabase
+            .from('siswa')
+            .update({
+                nama_siswa: formData.nama_siswa,
+                nis: formData.nis,
+                gender: formData.gender,
+                current_level_id: formData.level_id || null,
+                kelompok_id: formData.kelompok_id || null,
+                status: formData.status
+            })
+            .eq('id', id)
 
-    if (!error) {
+        if (error) throw error
+
+        // 2. CEK PERUBAHAN LEVEL (The Logic Fix)
+        // Jika level berubah DAN level baru tidak kosong
+        if (formData.level_id !== originalLevelId && formData.level_id) {
+            const confirmSync = confirm(
+                "PERHATIAN: Anda mengubah Level/Jilid siswa.\n\n" +
+                "Apakah Anda ingin mereset target pembelajaran siswa menyesuaikan level baru?\n" +
+                "(Klik OK untuk Sync Otomatis, Cancel untuk biarkan target lama)"
+            )
+
+            if (confirmSync) {
+                await syncTargets(formData.level_id)
+            }
+        }
+
         alert('Data siswa berhasil diperbarui')
         router.refresh()
         router.push('/admin/siswa')
-    } else {
-        alert('Gagal: ' + error.message)
+
+    } catch (err: any) {
+        alert('Gagal: ' + err.message)
+    } finally {
+        setSaving(false)
     }
-    setSaving(false)
   }
 
   const handleDelete = async () => {
@@ -156,7 +201,7 @@ export default function EditSiswaPage({ params }: { params: Promise<{ id: string
                             ))}
                         </select>
                     </div>
-                    <div>
+                    <div className={`p-3 rounded-lg border ${formData.level_id !== originalLevelId ? 'bg-yellow-50 border-yellow-200' : 'bg-white border-slate-300'}`}>
                         <label className="block text-sm font-medium text-slate-700 mb-1">Level / Jilid</label>
                         <select 
                             className="w-full p-2 border border-slate-300 rounded bg-white"
@@ -168,7 +213,25 @@ export default function EditSiswaPage({ params }: { params: Promise<{ id: string
                                 <option key={l.id} value={l.id}>{l.nama}</option>
                             ))}
                         </select>
-                        <p className="text-xs text-slate-500 mt-1">Mengubah level akan mereset target pembelajaran siswa.</p>
+                        {formData.level_id !== originalLevelId && (
+                            <p className="text-xs text-yellow-700 mt-2 font-medium flex items-center gap-1">
+                                <AlertTriangle size={12}/> Level berubah. Target akan disesuaikan saat disimpan.
+                            </p>
+                        )}
+                    </div>
+                    
+                    <div className="col-span-2">
+                         <label className="block text-sm font-medium text-slate-700 mb-1">Status Siswa</label>
+                         <div className="flex gap-4">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="status" value="aktif" checked={formData.status === 'aktif'} onChange={() => setFormData({...formData, status: 'aktif'})} />
+                                <span className="text-sm">Aktif</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="status" value="nonaktif" checked={formData.status === 'nonaktif'} onChange={() => setFormData({...formData, status: 'nonaktif'})} />
+                                <span className="text-sm text-slate-500">Non-Aktif / Keluar</span>
+                            </label>
+                         </div>
                     </div>
                 </div>
 
