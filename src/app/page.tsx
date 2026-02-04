@@ -1,8 +1,27 @@
 import { createClient } from '@/utils/supabase/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-// UPDATE: Menambahkan 'Shield' untuk User Management dan 'Settings' untuk Pengaturan
-import { LogOut, Users, BookOpen, GraduationCap, ClipboardCheck, TrendingUp, Calendar, AlertCircle, ChevronRight, BarChart3, Search, Clock, Activity, Shield, Settings } from 'lucide-react'
+import { 
+  LogOut, 
+  Users, 
+  BookOpen, 
+  GraduationCap, 
+  ClipboardCheck, 
+  TrendingUp, 
+  Calendar, 
+  AlertCircle, 
+  ChevronRight, 
+  BarChart3, 
+  Search, 
+  Clock, 
+  Activity, 
+  Shield, 
+  Settings,
+  FileText // Icon untuk Laporan
+} from 'lucide-react'
+
+// Agar greeting sesuai waktu user (Server Time -> WIB)
+export const dynamic = 'force-dynamic'
 
 export default async function Dashboard() {
   const supabase = await createClient()
@@ -15,12 +34,15 @@ export default async function Dashboard() {
   const { data: userProfile } = await supabase.from('users').select('*').eq('id', user.id).single()
   const isAdmin = userProfile?.roles && JSON.stringify(userProfile.roles).includes('admin')
 
-  // LOGIC SAPAAN WAKTU
-  const hour = new Date().getHours()
+  // LOGIC SAPAAN WAKTU (WIB)
+  // Kita paksa server time convert ke Asia/Jakarta untuk akurasi
+  const now = new Date()
+  const wibHour = Number(now.toLocaleTimeString('en-US', { hour: 'numeric', hour12: false, timeZone: 'Asia/Jakarta' }))
+  
   let greeting = 'Selamat Pagi'
-  if (hour >= 11 && hour < 15) greeting = 'Selamat Siang'
-  else if (hour >= 15 && hour < 18) greeting = 'Selamat Sore'
-  else if (hour >= 18) greeting = 'Selamat Malam'
+  if (wibHour >= 11 && wibHour < 15) greeting = 'Selamat Siang'
+  else if (wibHour >= 15 && wibHour < 18) greeting = 'Selamat Sore'
+  else if (wibHour >= 18 || wibHour < 4) greeting = 'Selamat Malam'
 
   // =========================================
   // ADMIN DATA FETCHING
@@ -39,8 +61,9 @@ export default async function Dashboard() {
     const { count: countKelompok } = await supabase.from('kelompok').select('*', { count: 'exact', head: true })
     const { count: countUjian } = await supabase.from('siswa').select('*', { count: 'exact', head: true }).eq('status_tes', 'siap_tes')
     
-    const today = new Date().toISOString().split('T')[0]
-    const { count: countJurnal } = await supabase.from('jurnal_harian').select('*', { count: 'exact', head: true }).gte('created_at', today)
+    // Hitung Jurnal Hari Ini (WIB)
+    const todayStart = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' }) // YYYY-MM-DD
+    const { count: countJurnal } = await supabase.from('jurnal_harian').select('*', { count: 'exact', head: true }).gte('created_at', todayStart)
 
     // A. Distribusi Level
     const { data: rawSiswa } = await supabase.from('siswa').select('level (nama)').not('current_level_id', 'is', null)
@@ -54,6 +77,7 @@ export default async function Dashboard() {
         .select(`
             created_at,
             halaman_ayat,
+            nilai,
             users ( nama_lengkap ),
             siswa_target (
                 siswa ( nama_siswa, current_level_id ),
@@ -101,23 +125,6 @@ export default async function Dashboard() {
             <span className="text-lg font-bold text-slate-800 tracking-tight hidden sm:block">Jurnal<span className="text-blue-600">Ummi</span></span>
           </div>
 
-          {/* Global Search (Visual Only) */}
-          {isAdmin && (
-              <div className="flex-1 max-w-md mx-4 hidden md:block">
-                  <div className="relative group">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500">
-                          <Search size={18} />
-                      </div>
-                      <input 
-                        type="text" 
-                        placeholder="Cari santri cepat (Coming Soon)..." 
-                        className="block w-full pl-10 pr-3 py-2 border border-slate-200 rounded-full leading-5 bg-slate-50 text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm transition-all"
-                        disabled 
-                      />
-                  </div>
-              </div>
-          )}
-
           <div className="flex items-center gap-4">
             <div className="text-right hidden sm:block leading-tight">
                 <div className="text-xs text-slate-400 uppercase font-bold tracking-wider">Pengguna</div>
@@ -125,7 +132,6 @@ export default async function Dashboard() {
                     {userProfile?.nama_lengkap || 'Guru'}
                 </div>
             </div>
-            {/* TAMBAHKAN TOMBOL SETTINGS DI SINI */}
             <Link href="/settings" className="rounded-full bg-slate-100 p-2 text-slate-500 hover:bg-blue-50 hover:text-blue-600 transition-colors" title="Pengaturan Akun">
                 <Settings size={18} />
             </Link>
@@ -208,6 +214,7 @@ export default async function Dashboard() {
                                             <span className="bg-slate-100 px-1.5 rounded text-slate-600">{log.siswa_target?.target_pembelajaran?.judul}</span>
                                             <span>&bull;</span>
                                             <span>{log.halaman_ayat}</span>
+                                            {log.nilai && <span className="font-bold bg-yellow-50 text-yellow-700 px-1 rounded">{log.nilai}</span>}
                                         </div>
                                     </div>
                                 ))
@@ -226,15 +233,15 @@ export default async function Dashboard() {
                         {/* Shortcuts Grid */}
                         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                             <h3 className="font-semibold text-slate-800 mb-4 text-sm uppercase tracking-wider text-slate-400">Menu Manajemen</h3>
-                            {/* UPDATE GRID COLS untuk menampung 6 menu dengan rapi */}
-                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
+                            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-4">
                                 <ShortcutItem href="/admin/kurikulum" icon={<BookOpen/>} label="Kurikulum" color="blue"/>
                                 <ShortcutItem href="/admin/kelompok" icon={<Users/>} label="Kelompok" color="purple"/>
-                                <ShortcutItem href="/admin/siswa" icon={<GraduationCap/>} label="Data Siswa" color="indigo"/>
+                                <ShortcutItem href="/admin/siswa" icon={<GraduationCap/>} label="Data Santri" color="indigo"/>
                                 <ShortcutItem href="/admin/ujian" icon={<ClipboardCheck/>} label="Ujian" color="orange"/>
+                                
+                                <ShortcutItem href="/admin/laporan" icon={<FileText/>} label="Laporan" color="green"/> {/* TOMBOL BARU */}
                                 <ShortcutItem href="/admin/users" icon={<Shield/>} label="User / Guru" color="red"/>
-                                {/* UPDATE: MENU IDENTITAS SEKOLAH */}
-                                <ShortcutItem href="/admin/pengaturan" icon={<Settings/>} label="Identitas Sekolah" color="slate"/>
+                                <ShortcutItem href="/admin/pengaturan" icon={<Settings/>} label="Identitas" color="slate"/>
                             </div>
                         </div>
 
@@ -270,7 +277,7 @@ export default async function Dashboard() {
             </div>
         )}
 
-        {/* --- SCHEDULE SECTION --- */}
+        {/* --- SCHEDULE SECTION (GURU) --- */}
         <div>
              <div className="mb-4 flex items-center justify-between">
                 <div>
@@ -318,7 +325,7 @@ export default async function Dashboard() {
 }
 
 // =========================================
-// SUB COMPONENTS (FIXED COLOR MAPPING)
+// SUB COMPONENTS
 // =========================================
 
 function StatCard({ icon, label, value, sub, color }: any) {
@@ -342,14 +349,13 @@ function StatCard({ icon, label, value, sub, color }: any) {
 }
 
 function ShortcutItem({ href, icon, label, color }: any) {
-    // FIX: Tailwind tidak bisa baca dynamic string literal (text-${color}-600)
-    // Kita harus mapping full class name-nya.
     const hoverColors: any = {
         blue: 'group-hover:text-blue-600',
         purple: 'group-hover:text-purple-600',
         indigo: 'group-hover:text-indigo-600',
         orange: 'group-hover:text-orange-600',
         red: 'group-hover:text-red-600',
+        green: 'group-hover:text-green-600',
         slate: 'group-hover:text-slate-800',
     }
 
@@ -358,7 +364,7 @@ function ShortcutItem({ href, icon, label, color }: any) {
             <div className={`mb-2 text-slate-400 transition-colors ${hoverColors[color] || 'group-hover:text-blue-600'}`}>
                 {icon}
             </div>
-            <span className="text-xs font-semibold text-slate-600 group-hover:text-slate-900">{label}</span>
+            <span className="text-xs font-semibold text-slate-600 group-hover:text-slate-900 text-center">{label}</span>
         </Link>
     )
 }
