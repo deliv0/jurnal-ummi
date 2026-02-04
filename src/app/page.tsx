@@ -125,6 +125,10 @@ export default async function Dashboard() {
                     {userProfile?.nama_lengkap || 'Guru'}
                 </div>
             </div>
+            {/* TAMBAHKAN TOMBOL SETTINGS DI SINI */}
+            <Link href="/settings" className="rounded-full bg-slate-100 p-2 text-slate-500 hover:bg-blue-50 hover:text-blue-600 transition-colors" title="Pengaturan Akun">
+                <Settings size={18} />
+            </Link>
             <form action={signOut}>
               <button className="rounded-full bg-slate-100 p-2 text-slate-500 hover:bg-red-50 hover:text-red-600 transition-colors" title="Keluar">
                 <LogOut size={18} />
