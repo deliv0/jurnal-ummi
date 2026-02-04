@@ -3,14 +3,11 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import Link from 'next/link'
-import { ArrowLeft, Printer, Calculator, Banknote, Calendar, Loader2, Search, User } from 'lucide-react'
+import { ArrowLeft, Printer, Calculator, Banknote, User, Loader2 } from 'lucide-react'
 
 export default function KeuanganPage() {
   const supabase = createClient()
 
-  // SETTINGS (Bisa diubah lewat UI nanti)
-  // Berapa honor guru badal sekali masuk? (Diambil dari jatah 40% guru utama)
-  const [tarifBadal, setTarifBadal] = useState(20000) 
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)) // YYYY-MM
   
   // STATE DATA
@@ -22,7 +19,6 @@ export default function KeuanganPage() {
   const [stats, setStats] = useState({ omset: 0, bagiHasil: 0, operasional: 0 })
 
   useEffect(() => {
-    // Load Instansi Info untuk Kop Surat
     const fetchInstansi = async () => {
         const { data } = await supabase.from('instansi').select('*').single()
         if(data) setInstansi(data)
@@ -34,128 +30,121 @@ export default function KeuanganPage() {
     if(e) e.preventDefault()
     setLoading(true)
 
-    // 1. Tentukan Range Tanggal
     const [year, month] = selectedMonth.split('-')
     const startDate = `${year}-${month}-01`
     const endDate = new Date(Number(year), Number(month), 0).toISOString().split('T')[0]
 
-    // 2. Ambil Data Pembayaran (Omset)
+    // 1. Ambil Data Kelompok (Wadah)
+    const { data: listKelompok } = await supabase
+        .from('kelompok')
+        .select('id, nama_kelompok, guru_utama_id, users:guru_utama_id(nama_lengkap)')
+    
+    // 2. Ambil Data Pembayaran (SUMBER DANA)
     const { data: rawBayar } = await supabase
         .from('pembayaran')
         .select('kelompok_id, total_bayar')
         .gte('tanggal', startDate)
         .lte('tanggal', endDate)
 
-    // 3. Ambil Data Kelompok & Guru Utama
-    const { data: listKelompok } = await supabase
-        .from('kelompok')
-        .select('id, nama_kelompok, guru_utama_id, users:guru_utama_id(nama_lengkap)')
-    
-    // 4. Ambil Data Absensi (Untuk Cek Siapa yang Mengajar)
-    // Kita perlu tahu siapa user_id yg melakukan absen pada tanggal tersebut
+    // 3. Ambil Data Absensi (DISTRIBUSI KERJA)
+    // Ambil distinct (tanggal + kelompok) untuk menghitung total sesi
     const { data: listAbsen } = await supabase
         .from('absensi')
         .select('tanggal, kelompok_id, user_id')
         .gte('tanggal', startDate)
         .lte('tanggal', endDate)
 
-    // 5. Ambil List Semua Guru (Untuk menampung gaji badal bagi guru yg tidak punya kelas)
-    const { data: listGuru } = await supabase
-        .from('users')
-        .select('id, nama_lengkap')
-        .eq('role', 'guru') // Asumsi ada kolom role, atau ambil semua user
+    // 4. Ambil List Guru
+    const { data: listGuru } = await supabase.from('users').select('id, nama_lengkap')
 
     if (!rawBayar || !listKelompok || !listAbsen || !listGuru) {
         setLoading(false)
         return
     }
 
-    // --- ALGORITMA HITUNG GAJI ---
+    // --- LOGIC: AVERAGE SESSION VALUE ---
     
-    // A. Init Dompet Guru
-    // Structure: { guruId: { nama, gross: 0, badal_income: 0, badal_deduct: 0, badal_count: 0, total: 0 } }
+    // Init Dompet Guru
     const salaryMap: Record<string, any> = {}
-    
     listGuru.forEach(g => {
         salaryMap[g.id] = { 
-            id: g.id,
+            id: g.id, 
             nama: g.nama_lengkap, 
-            omset_kelas: 0,
-            gross_share: 0,    // Hak 40%
-            badal_income: 0,   // Dapat duit krn menggantikan orang
-            badal_deduct: 0,   // Potongan krn digantikan orang
-            badal_in_count: 0, // Berapa kali jadi badal
-            badal_out_count: 0 // Berapa kali digantikan
+            honor_utama: 0,    // Gaji dari kelas sendiri
+            honor_badal: 0,    // Gaji dari menggantikan orang
+            sesi_utama: 0,
+            sesi_badal: 0,
+            total_terima: 0
         }
     })
 
-    // B. Hitung Omset & Share 40% per Kelompok
     let totalOmsetSemua = 0
 
+    // PROSES PER KELOMPOK
     listKelompok.forEach(k => {
-        // Hitung total uang masuk di kelompok ini
-        const omset = rawBayar
+        // A. Hitung Total Omset Kelompok Bulan Ini
+        const omsetKelompok = rawBayar
             .filter(b => b.kelompok_id === k.id)
             .reduce((sum, b) => sum + (b.total_bayar || 0), 0)
         
-        totalOmsetSemua += omset
-        
-        // Hak Guru Utama 40%
-        const share40 = omset * 0.4
-        
-        // Masukkan ke dompet Guru Utama
-        if (k.guru_utama_id && salaryMap[k.guru_utama_id]) {
-            salaryMap[k.guru_utama_id].omset_kelas += omset
-            salaryMap[k.guru_utama_id].gross_share += share40
-        }
-    })
+        totalOmsetSemua += omsetKelompok
 
-    // C. Hitung Badal (Transfer Honor)
-    // Kita cek absensi unik per hari per kelompok
-    // (Karena absensi disimpan per siswa, kita ambil distinct by tanggal & kelompok)
-    
-    const sesiUnik: Set<string> = new Set()
-    
-    listAbsen.forEach(absen => {
-        const key = `${absen.tanggal}_${absen.kelompok_id}`
+        // B. Hitung Total Sesi (Hari Efektif) Kelompok Ini
+        // Filter absen milik kelompok ini, lalu ambil unik tanggalnya
+        const sesiUnik = new Set(
+            listAbsen.filter(a => a.kelompok_id === k.id).map(a => `${a.tanggal}_${a.user_id}`)
+        )
+        // Array unik sesi: [{tanggal, pengajar_id}]
+        const sesiList = Array.from(sesiUnik).map(s => {
+            const [tgl, uid] = s.split('_')
+            return { tanggal: tgl, pengajar_id: uid }
+        })
         
-        // Jika sesi ini belum dihitung
-        if (!sesiUnik.has(key)) {
-            sesiUnik.add(key)
+        const jumlahSesi = sesiList.length
+
+        // C. Hitung Nilai Per Sesi (Fair Share)
+        // Jika tidak ada sesi tapi ada uang masuk (aneh, tapi bisa jadi titipan), simpan di guru utama.
+        // Jika ada sesi, bagi rata.
+        
+        const hakGuruTotal = omsetKelompok * 0.40 // 40%
+        const honorPerSesi = jumlahSesi > 0 ? (hakGuruTotal / jumlahSesi) : 0
+
+        // D. Distribusi ke Pengajar (Sesuai Absensi)
+        sesiList.forEach(sesi => {
+            const pengajarId = sesi.pengajar_id
+            const isGuruUtama = pengajarId === k.guru_utama_id
             
-            // Cari Kelompoknya
-            const targetKelompok = listKelompok.find(k => k.id === absen.kelompok_id)
-            if (targetKelompok) {
-                const guruUtamaId = targetKelompok.guru_utama_id
-                const guruPengajarId = absen.user_id // Siapa yg input absen
-                
-                // JIKA PENGAJAR != GURU UTAMA => BADAL TERDETEKSI
-                if (guruUtamaId && guruPengajarId && guruUtamaId !== guruPengajarId) {
-                    
-                    // 1. Potong Guru Utama
-                    if (salaryMap[guruUtamaId]) {
-                        salaryMap[guruUtamaId].badal_deduct += tarifBadal
-                        salaryMap[guruUtamaId].badal_out_count += 1
-                    }
-
-                    // 2. Beri ke Guru Badal
-                    // (Pastikan guru badal ada di map, kalau admin yg input mungkin skip)
-                    if (salaryMap[guruPengajarId]) {
-                        salaryMap[guruPengajarId].badal_income += tarifBadal
-                        salaryMap[guruPengajarId].badal_in_count += 1
-                    }
+            if (salaryMap[pengajarId]) {
+                if (isGuruUtama) {
+                    salaryMap[pengajarId].honor_utama += honorPerSesi
+                    salaryMap[pengajarId].sesi_utama += 1
+                } else {
+                    salaryMap[pengajarId].honor_badal += honorPerSesi
+                    salaryMap[pengajarId].sesi_badal += 1
                 }
+            } else {
+                // Case: Admin/User lain yg mengajar tapi tidak ada di listGuru
+                // Uang tetap dihitung tapi mungkin tidak tampil di tabel guru.
+                // Idealnya masukkan ke "Unknown/Admin"
             }
+        })
+
+        // Case Khusus: Jika ada omset tapi TIDAK ADA SESI sama sekali (Libur full tapi ada yg bayar SPP)
+        // Berikan semua ke Guru Utama
+        if (jumlahSesi === 0 && hakGuruTotal > 0 && k.guru_utama_id) {
+             if (salaryMap[k.guru_utama_id]) {
+                 salaryMap[k.guru_utama_id].honor_utama += hakGuruTotal
+             }
         }
     })
 
-    // D. Finalisasi Array
+    // Finalisasi
     const finalReport = Object.values(salaryMap)
         .map((s: any) => ({
             ...s,
-            total_terima: (s.gross_share - s.badal_deduct) + s.badal_income
+            total_terima: s.honor_utama + s.honor_badal
         }))
-        .filter((s: any) => s.total_terima > 0 || s.omset_kelas > 0) // Hanya tampilkan yg ada duitnya
+        .filter((s: any) => s.total_terima > 0)
         .sort((a: any, b: any) => b.total_terima - a.total_terima)
 
     setLaporan(finalReport)
@@ -167,13 +156,12 @@ export default function KeuanganPage() {
     setLoading(false)
   }
 
-  // Helper Rupiah
-  const rp = (num: number) => 'Rp ' + num.toLocaleString('id-ID')
+  const rp = (num: number) => 'Rp ' + Math.round(num).toLocaleString('id-ID')
 
   return (
     <div className="min-h-screen bg-slate-50 p-6 print:p-0 print:bg-white">
       
-      {/* FILTER AREA (HIDDEN ON PRINT) */}
+      {/* FILTER AREA */}
       <div className="max-w-5xl mx-auto mb-6 print:hidden">
         <div className="flex items-center gap-4 mb-6">
             <Link href="/" className="rounded-full bg-white p-2 text-slate-500 shadow-sm hover:text-blue-600"><ArrowLeft size={20}/></Link>
@@ -216,17 +204,9 @@ export default function KeuanganPage() {
                         required
                     />
                 </div>
-                <div className="w-full md:w-48">
-                    <label className="block text-sm font-bold text-slate-700 mb-2">Tarif Badal / Sesi</label>
-                    <div className="relative">
-                        <span className="absolute left-3 top-2.5 text-slate-500 text-sm font-bold">Rp</span>
-                        <input 
-                            type="number" 
-                            className="w-full pl-10 p-2.5 border rounded-lg bg-slate-50 border-slate-300"
-                            value={tarifBadal}
-                            onChange={(e) => setTarifBadal(Number(e.target.value))}
-                        />
-                    </div>
+                {/* INPUT TARIF BADAL DIHAPUS KARENA SUDAH OTOMATIS */}
+                <div className="flex-1 text-xs text-slate-500 pb-2">
+                    *Honor badal dihitung otomatis berdasarkan rata-rata omset per sesi pada kelas yang digantikan.
                 </div>
                 <div className="flex gap-2 w-full md:w-auto">
                     <button type="submit" disabled={loading} className="bg-blue-600 text-white px-6 py-2.5 rounded-lg font-bold hover:bg-blue-700 flex items-center gap-2">
@@ -260,10 +240,8 @@ export default function KeuanganPage() {
                         <tr className="bg-slate-100 text-slate-900 font-bold text-center uppercase">
                             <th className="border border-slate-600 p-2 w-10">No</th>
                             <th className="border border-slate-600 p-2 text-left">Nama Guru</th>
-                            <th className="border border-slate-600 p-2">Omset Kelas</th>
-                            <th className="border border-slate-600 p-2 bg-blue-50">Bagi Hasil (40%)</th>
-                            <th className="border border-slate-600 p-2 bg-red-50 text-red-700">Pot. Badal</th>
-                            <th className="border border-slate-600 p-2 bg-green-50 text-green-700">Honor Badal</th>
+                            <th className="border border-slate-600 p-2 bg-blue-50">Honor Utama</th>
+                            <th className="border border-slate-600 p-2 bg-green-50">Honor Badal</th>
                             <th className="border border-slate-600 p-2 bg-slate-200">Total Terima</th>
                         </tr>
                     </thead>
@@ -271,25 +249,27 @@ export default function KeuanganPage() {
                         {laporan.map((row, index) => (
                             <tr key={index} className="break-inside-avoid hover:bg-slate-50">
                                 <td className="border border-slate-400 p-2 text-center">{index + 1}</td>
-                                <td className="border border-slate-400 p-2 font-bold">{row.nama}</td>
-                                <td className="border border-slate-400 p-2 text-right">{rp(row.omset_kelas)}</td>
-                                <td className="border border-slate-400 p-2 text-right font-medium bg-blue-50">{rp(row.gross_share)}</td>
-                                <td className="border border-slate-400 p-2 text-right text-red-600 bg-red-50">
-                                    {row.badal_deduct > 0 ? `(${row.badal_out_count}x) -${rp(row.badal_deduct)}` : '-'}
+                                <td className="border border-slate-400 p-2">
+                                    <div className="font-bold">{row.nama}</div>
+                                    <div className="text-[10px] text-slate-500">
+                                        Mengajar: {row.sesi_utama} sesi
+                                        {row.sesi_badal > 0 && `, Badal: ${row.sesi_badal} sesi`}
+                                    </div>
                                 </td>
-                                <td className="border border-slate-400 p-2 text-right text-green-600 bg-green-50">
-                                    {row.badal_income > 0 ? `(${row.badal_in_count}x) +${rp(row.badal_income)}` : '-'}
+                                <td className="border border-slate-400 p-2 text-right bg-blue-50 font-medium">
+                                    {rp(row.honor_utama)}
+                                </td>
+                                <td className="border border-slate-400 p-2 text-right bg-green-50 text-green-700">
+                                    {row.honor_badal > 0 ? `+${rp(row.honor_badal)}` : '-'}
                                 </td>
                                 <td className="border border-slate-400 p-2 text-right font-bold bg-slate-100">{rp(row.total_terima)}</td>
                             </tr>
                         ))}
                         {/* FOOTER TOTAL */}
                         <tr className="bg-slate-800 text-white font-bold">
-                            <td colSpan={2} className="p-2 text-right">TOTAL PENGELUARAN GAJI</td>
-                            <td className="p-2 text-right">-</td>
-                            <td className="p-2 text-right">{rp(laporan.reduce((a,b)=>a+b.gross_share, 0))}</td>
-                            <td className="p-2 text-right text-red-200">-{rp(laporan.reduce((a,b)=>a+b.badal_deduct, 0))}</td>
-                            <td className="p-2 text-right text-green-200">+{rp(laporan.reduce((a,b)=>a+b.badal_income, 0))}</td>
+                            <td colSpan={2} className="p-2 text-right">TOTAL</td>
+                            <td className="p-2 text-right text-blue-200">{rp(laporan.reduce((a,b)=>a+b.honor_utama, 0))}</td>
+                            <td className="p-2 text-right text-green-200">{rp(laporan.reduce((a,b)=>a+b.honor_badal, 0))}</td>
                             <td className="p-2 text-right text-yellow-400">{rp(laporan.reduce((a,b)=>a+b.total_terima, 0))}</td>
                         </tr>
                     </tbody>
