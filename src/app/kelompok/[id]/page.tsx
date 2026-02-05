@@ -22,16 +22,15 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
   const [viewMode, setViewMode] = useState<'absen' | 'belajar'>('belajar') 
   const [saving, setSaving] = useState(false)
   
-  // STATE TANGGAL (BACKDATE FEATURE)
+  // STATE TANGGAL
   const [selectedDate, setSelectedDate] = useState(new Date().toLocaleDateString('en-CA')) // YYYY-MM-DD
 
-  // STATE FORM ABSEN & PEMBAYARAN
+  // STATE FORM
   const [formAbsen, setFormAbsen] = useState<Record<string, string>>({}) 
   const [formBayar, setFormBayar] = useState<Record<string, { isPay: boolean, count: number }>>({})
 
   const HARGA_SESI = 5000 
 
-  // RELOAD DATA KETIKA ID ATAU TANGGAL BERUBAH
   useEffect(() => {
     fetchData()
   }, [id, selectedDate])
@@ -39,11 +38,9 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
   const fetchData = async () => {
     setLoading(true)
     
-    // 1. Ambil Data Kelompok
     const { data: dataKelompok } = await supabase.from('kelompok').select('*').eq('id', id).single()
     if(dataKelompok) setKelompok(dataKelompok)
 
-    // 2. Ambil Siswa
     const { data: dataSiswa } = await supabase
         .from('siswa')
         .select('*, level(nama)')
@@ -54,7 +51,6 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
     if(dataSiswa) {
         setSiswaList(dataSiswa)
         
-        // Init Form Default
         const initAbsen: Record<string, string> = {}
         const initBayar: Record<string, any> = {}
         
@@ -66,23 +62,20 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
         setFormBayar(initBayar)
     }
 
-    // 3. CEK ABSEN PADA TANGGAL TERPILIH (Bukan selalu hari ini)
     const { data: dataAbsen } = await supabase.from('absensi').select('*')
         .eq('kelompok_id', id)
-        .eq('tanggal', selectedDate) // Gunakan selectedDate
+        .eq('tanggal', selectedDate)
     
     if (dataAbsen && dataAbsen.length > 0) {
-        setViewMode('belajar') // Jika sudah ada absen, masuk mode view
+        setViewMode('belajar')
         const map: Record<string, any> = {}
         dataAbsen.forEach(a => map[a.siswa_id] = a.status)
         setAbsensiMap(map)
     } else {
-        setViewMode('absen') // Jika belum ada, masuk mode input
+        setViewMode('absen') 
         setAbsensiMap({})
     }
 
-    // 4. Cek Progress Jurnal PADA TANGGAL TERPILIH
-    // Kita filter jurnal yang dibuat pada rentang tanggal tersebut
     const startDate = selectedDate + 'T00:00:00'
     const endDate = selectedDate + 'T23:59:59'
     
@@ -98,7 +91,6 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
     setLoading(false)
   }
 
-  // --- LOGIC FORM HELPER ---
   const toggleStatus = (siswaId: string, current: string) => {
       const cycle = ['hadir', 'sakit', 'ijin', 'alpa']
       const next = cycle[(cycle.indexOf(current) + 1) % cycle.length]
@@ -123,16 +115,12 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
       setFormBayar(prev => ({ ...prev, [siswaId]: { isPay: true, count: count } }))
   }
 
-  // --- LOGIC SIMPAN (ABSENSI + KEUANGAN) ---
   const handleSaveAbsensi = async () => {
     setSaving(true)
     try {
         const { data: { user } } = await supabase.auth.getUser()
-        
-        // GUNAKAN TANGGAL PILIHAN
         const tanggalSimpan = selectedDate 
 
-        // 1. Simpan Absensi
         const upsertAbsen = siswaList.map(siswa => ({
             siswa_id: siswa.id,
             kelompok_id: id,
@@ -143,7 +131,6 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
         const { error: errAbsen } = await supabase.from('absensi').upsert(upsertAbsen, { onConflict: 'siswa_id, tanggal' })
         if (errAbsen) throw errAbsen
 
-        // 2. Simpan Pembayaran
         const paymentInserts: any[] = []
         
         for (const siswa of siswaList) {
@@ -157,7 +144,7 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
             if (payData && payData.isPay && payData.count > 0) {
                 const totalBayar = payData.count * HARGA_SESI
                 paymentInserts.push({
-                    tanggal: tanggalSimpan, // Gunakan tanggal pilihan
+                    tanggal: tanggalSimpan,
                     siswa_id: siswa.id,
                     kelompok_id: id,
                     guru_id: user?.id,
@@ -169,7 +156,6 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
                 deltaSaldo += payData.count 
             }
 
-            // Update Saldo (Realtime, tidak bergantung tanggal)
             if (deltaSaldo !== 0) {
                 const currentSaldo = siswa.saldo_sesi || 0
                 await supabase.from('siswa').update({ saldo_sesi: currentSaldo + deltaSaldo }).eq('id', siswa.id)
@@ -196,7 +182,7 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
   // --- TAMPILAN MODE 1: FORM INPUT ABSENSI ---
   if (viewMode === 'absen') {
       return (
-        <div className="min-h-screen bg-slate-50 pb-32">
+        <div className="min-h-screen bg-slate-50 flex flex-col">
             
             {/* HEADER STICKY */}
             <div className="sticky top-0 z-30 bg-white shadow-md border-b border-slate-200">
@@ -208,7 +194,6 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
                     </div>
                 </div>
                 
-                {/* DATE PICKER DI HEADER */}
                 <div className="px-4 pb-3">
                     <div className={`flex items-center gap-2 border rounded-lg px-3 py-2 ${selectedDate !== new Date().toLocaleDateString('en-CA') ? 'bg-orange-50 border-orange-200' : 'bg-slate-50 border-slate-200'}`}>
                         <Calendar size={18} className={selectedDate !== new Date().toLocaleDateString('en-CA') ? 'text-orange-600' : 'text-slate-500'}/>
@@ -222,9 +207,9 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
                 </div>
             </div>
 
-            <main className="p-4 max-w-3xl mx-auto space-y-4">
+            {/* MAIN CONTENT - PB-48 (PADDING BOTTOM BESAR) */}
+            <main className="p-4 max-w-3xl mx-auto space-y-4 pb-48 w-full flex-1">
                 
-                {/* INFO ALERT JIKA BACKDATE */}
                 {selectedDate !== new Date().toLocaleDateString('en-CA') && (
                     <div className="bg-orange-100 text-orange-800 text-xs p-3 rounded-lg flex items-center gap-2 border border-orange-200 animate-in fade-in">
                         <AlertCircle size={16}/>
@@ -329,7 +314,7 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
                 })}
             </main>
 
-            {/* TOMBOL SIMPAN FIXED DI BAWAH (Agar mudah dijangkau) */}
+            {/* TOMBOL SIMPAN FIXED DI BAWAH */}
             <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t z-20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
                 <div className="max-w-3xl mx-auto">
                     <button 
@@ -350,10 +335,10 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
   const absentStudents = siswaList.filter(s => absensiMap[s.id] && absensiMap[s.id] !== 'hadir')
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-10">
+    <div className="min-h-screen bg-slate-50 flex flex-col">
         
         {/* HEADER DASHBOARD */}
-        <div className="bg-blue-600 text-white pt-8 pb-12 px-6 rounded-b-[2.5rem] shadow-lg relative overflow-hidden">
+        <div className="bg-blue-600 text-white pt-8 pb-12 px-6 rounded-b-[2.5rem] shadow-lg relative overflow-hidden shrink-0">
             <div className="absolute top-0 left-0 w-full h-full bg-white/5 pattern-grid opacity-30"></div>
             <div className="relative z-10 max-w-2xl mx-auto">
                 <div className="flex justify-between items-start mb-4">
@@ -369,7 +354,6 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
                 </div>
                 <h1 className="text-2xl font-bold mb-1">{kelompok?.nama_kelompok}</h1>
                 
-                {/* DATE PICKER (WHITE VARIANT) */}
                 <div className="flex items-center gap-2 mt-2 bg-blue-700/50 backdrop-blur-sm rounded-lg px-3 py-1.5 w-fit border border-blue-500/50">
                     <Calendar size={14} className="text-blue-100"/>
                     <input 
@@ -380,7 +364,6 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
                     />
                 </div>
                 
-                {/* RINGKASAN */}
                 <div className="mt-6 flex gap-3">
                     <div className="bg-white/10 backdrop-blur-md rounded-lg p-2.5 flex-1 border border-white/10">
                         <div className="text-xs text-blue-100 mb-1">Hadir</div>
@@ -398,9 +381,8 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
             </div>
         </div>
 
-        <main className="px-4 -mt-6 max-w-2xl mx-auto space-y-4 relative z-20">
+        <main className="px-4 -mt-6 max-w-2xl mx-auto space-y-4 relative z-20 w-full flex-1 pb-20">
             
-            {/* ALERT JIKA BUKA TANGGAL LAMA */}
             {selectedDate !== new Date().toLocaleDateString('en-CA') && (
                 <div className="bg-white p-3 rounded-xl shadow-sm border-l-4 border-l-orange-500 flex items-center gap-2 text-sm text-slate-600">
                     <AlertCircle className="text-orange-500" size={18}/>

@@ -167,7 +167,6 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
   if (loading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600"/></div>
 
   return (
-    // Tambahkan flex-col agar struktur layout lebih solid
     <div className="min-h-screen bg-slate-50 flex flex-col">
       
       {/* HEADER BARU (STICKY) - Z-INDEX 50 */}
@@ -223,8 +222,12 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
           </div>
       </div>
 
-      {/* BODY CONTENT */}
-      <main className="flex-1 max-w-2xl mx-auto p-4 space-y-4 pb-32 w-full">
+      {/* BODY CONTENT 
+          PERBAIKAN: pb-60 (Padding Bottom 15rem/240px) 
+          Ini akan memaksa konten bisa discroll JAUH ke atas, 
+          melewati appbar apapun yang ada di bawah. 
+      */}
+      <main className="flex-1 max-w-2xl mx-auto p-4 space-y-4 pb-60 w-full">
         
         {selectedDate !== new Date().toLocaleDateString('en-CA') && (
             <div className="bg-orange-50 text-orange-700 px-4 py-2 rounded-lg text-xs font-bold border border-orange-200 flex items-center gap-2 mb-2 animate-in fade-in">
@@ -329,6 +332,9 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                                     >
                                         {savingId === target.id ? <Loader2 className="animate-spin"/> : <><Save size={18}/> SIMPAN NILAI</>}
                                     </button>
+                                    
+                                    {/* Spacer Extra di bawah tombol */}
+                                    <div className="h-4"></div>
                                 </div>
                             </div>
                         )}
