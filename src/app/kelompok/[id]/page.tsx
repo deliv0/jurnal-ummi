@@ -207,8 +207,8 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
                 </div>
             </div>
 
-            {/* MAIN CONTENT - PB-48 (PADDING BOTTOM BESAR) */}
-            <main className="p-4 max-w-3xl mx-auto space-y-4 pb-48 w-full flex-1">
+            {/* MAIN CONTENT - PB-80 (SUPER BESAR UNTUK MENGHINDARI TOMBOL TERTUTUP) */}
+            <main className="p-4 max-w-3xl mx-auto space-y-4 pb-80 w-full flex-1">
                 
                 {selectedDate !== new Date().toLocaleDateString('en-CA') && (
                     <div className="bg-orange-100 text-orange-800 text-xs p-3 rounded-lg flex items-center gap-2 border border-orange-200 animate-in fade-in">
@@ -312,10 +312,13 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
                         </div>
                     )
                 })}
+
+                {/* DUMMY SPACER UNTUK MEMAKSA SCROLL LEBIH DALAM */}
+                <div className="h-24 w-full bg-transparent"></div>
             </main>
 
             {/* TOMBOL SIMPAN FIXED DI BAWAH */}
-            <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t z-20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+            <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
                 <div className="max-w-3xl mx-auto">
                     <button 
                         onClick={handleSaveAbsensi} 
@@ -381,6 +384,7 @@ export default function KelompokDetailPage({ params }: { params: Promise<{ id: s
             </div>
         </div>
 
+        {/* MAIN CONTENT DASHBOARD */}
         <main className="px-4 -mt-6 max-w-2xl mx-auto space-y-4 relative z-20 w-full flex-1 pb-20">
             
             {selectedDate !== new Date().toLocaleDateString('en-CA') && (
