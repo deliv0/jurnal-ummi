@@ -3,7 +3,7 @@
 import { useState, useEffect, use } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import Link from 'next/link'
-import { ArrowLeft, Save, Clock, History, BookOpen, CheckCircle, Loader2, AlertCircle, Mic, Book, ChevronDown, ChevronRight, GraduationCap } from 'lucide-react'
+import { ArrowLeft, Save, History, CheckCircle, Loader2, AlertCircle, Mic, Book, ChevronDown, ChevronRight, ChevronLeft, GraduationCap, Calendar } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { QURAN_DATA, JUZ_LIST } from '@/data/quran'
 
@@ -19,13 +19,14 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
   const [kelompokSiswa, setKelompokSiswa] = useState<any[]>([]) 
   const [loading, setLoading] = useState(true)
 
-  // STATE UI
+  // STATE UI & FORM
+  // Default tanggal adalah HARI INI (YYYY-MM-DD)
+  const [selectedDate, setSelectedDate] = useState(new Date().toLocaleDateString('en-CA')) // Format YYYY-MM-DD lokal
   const [activeTab, setActiveTab] = useState<'tahfidz' | 'tilawah'>('tahfidz') 
   const [expandedTarget, setExpandedTarget] = useState<string | null>(null) 
   const [savingId, setSavingId] = useState<string | null>(null)
   const [submittingExam, setSubmittingExam] = useState(false)
   
-  // STATE FORM
   const [formValues, setFormValues] = useState<Record<string, any>>({})
   const [quranState, setQuranState] = useState<Record<string, any>>({})
   const [message, setMessage] = useState<{type: 'success'|'error', text: string} | null>(null)
@@ -37,17 +38,17 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
   const fetchAllData = async () => {
     setLoading(true)
     
-    // 1. AMBIL DATA SISWA
+    // 1. DATA SISWA
     const { data: dataSiswa } = await supabase.from('siswa').select('*, kelompok(nama_kelompok), level(nama)').eq('id', siswaId).single()
     if(dataSiswa) setSiswa(dataSiswa)
 
-    // 2. AMBIL LIST TEMAN (Navigasi)
+    // 2. LIST TEMAN (Untuk Navigasi Next/Prev)
     if(dataSiswa?.kelompok_id) {
         const { data: teman } = await supabase.from('siswa').select('id').eq('kelompok_id', dataSiswa.kelompok_id).eq('status', 'aktif').order('nama_siswa')
         if(teman) setKelompokSiswa(teman)
     }
 
-    // 3. LOAD TARGET
+    // 3. TARGET HAFALAN
     let currentTargets = []
     const { data: existingTargets } = await supabase.from('siswa_target').select('*, target_pembelajaran(judul, kategori_target)').eq('siswa_id', siswaId).eq('status', 'active')
 
@@ -71,10 +72,10 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
       setFormValues(initialForm)
     }
 
-    // 4. LOAD RIWAYAT
+    // 4. RIWAYAT (Hanya 3 Terakhir untuk referensi)
     const { data: dataRiwayat } = await supabase.from('jurnal_harian').select(`
         created_at, halaman_ayat, nilai, catatan, siswa_target_id, siswa_target!inner ( target_pembelajaran ( judul ) )
-    `).eq('siswa_target.siswa_id', siswaId).order('created_at', { ascending: false }).limit(5)
+    `).eq('siswa_target.siswa_id', siswaId).order('created_at', { ascending: false }).limit(3)
 
     if(dataRiwayat) setRiwayat(dataRiwayat)
     setLoading(false)
@@ -106,7 +107,12 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
         const input = formValues[targetId]
         if (!input.halaman && !input.nilai) throw new Error("Mohon isi capaian atau nilai.")
 
+        // LOGIC TANGGAL: Gabungkan Tanggal Dipilih + Jam Sekarang (Agar urutan log tetap benar)
+        const timePart = new Date().toTimeString().split(' ')[0] // HH:MM:SS
+        const dateTimeString = `${selectedDate}T${timePart}`
+
         const { error } = await supabase.from('jurnal_harian').insert({
+            created_at: new Date(dateTimeString).toISOString(), // GUNAKAN TANGGAL PILIHAN
             siswa_target_id: targetId,
             guru_id: user?.id,
             status_kehadiran: 'hadir',
@@ -117,8 +123,9 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
         if(error) throw error
         setMessage({ type: 'success', text: 'Tersimpan!' })
         
+        // Update Riwayat Lokal (Agar guru langsung lihat hasil inputnya)
         setRiwayat(prev => [{
-            created_at: new Date().toISOString(),
+            created_at: new Date(dateTimeString).toISOString(),
             halaman_ayat: input.halaman,
             nilai: input.nilai,
             catatan: input.catatan,
@@ -126,6 +133,7 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
             siswa_target: { target_pembelajaran: { judul: activeTargets.find(t=>t.id===targetId)?.target_pembelajaran?.judul } }
         }, ...prev])
 
+        // Reset Form
         setFormValues(prev => ({ ...prev, [targetId]: { halaman: '', nilai: '', catatan: '' } }))
         setQuranState(prev => { const n = {...prev}; delete n[targetId]; return n; })
         setExpandedTarget(null)
@@ -136,36 +144,33 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
     }
   }
 
-  // --- LOGIC PENGAJUAN UJIAN ---
   const handleAjukanUjian = async () => {
-      if(!confirm("Apakah Anda yakin santri ini sudah menyelesaikan materi dan SIAP UJIAN kenaikan jilid?")) return;
-      
+      if(!confirm("Yakin ajukan ujian kenaikan jilid?")) return;
       setSubmittingExam(true)
       try {
-          const { error } = await supabase.from('siswa').update({ status_tes: 'siap_tes' }).eq('id', siswaId)
-          if(error) throw error
-          
+          await supabase.from('siswa').update({ status_tes: 'siap_tes' }).eq('id', siswaId)
           setSiswa((prev: any) => ({ ...prev, status_tes: 'siap_tes' }))
-          alert("Berhasil diajukan! Santri kini masuk antrian ujian.")
-      } catch (err: any) {
-          alert("Gagal mengajukan: " + err.message)
-      } finally {
-          setSubmittingExam(false)
-      }
+          alert("Berhasil diajukan!")
+      } catch (err: any) { alert(err.message) } finally { setSubmittingExam(false) }
   }
 
-  const handleNextSiswa = () => {
+  // NAVIGASI NEXT/PREV
+  const navigateSiswa = (direction: 'next' | 'prev') => {
       const currentIndex = kelompokSiswa.findIndex(s => s.id === siswaId)
-      if(currentIndex !== -1 && currentIndex < kelompokSiswa.length - 1) {
-          const nextId = kelompokSiswa[currentIndex + 1].id
-          router.push(`/kelompok/${kelompokId}/siswa/${nextId}`)
-      } else {
-          alert("Ini siswa terakhir di daftar.")
+      if (currentIndex === -1) return
+
+      let targetId = null
+      if (direction === 'next' && currentIndex < kelompokSiswa.length - 1) {
+          targetId = kelompokSiswa[currentIndex + 1].id
+      } else if (direction === 'prev' && currentIndex > 0) {
+          targetId = kelompokSiswa[currentIndex - 1].id
       }
+
+      if (targetId) router.push(`/kelompok/${kelompokId}/siswa/${targetId}`)
+      else alert(direction === 'next' ? "Ini siswa terakhir." : "Ini siswa pertama.")
   }
 
   const getLastHistory = (targetId: string) => riwayat.find(r => r.siswa_target_id === targetId)
-
   const filteredTargets = activeTargets.filter(t => {
       const cat = t.target_pembelajaran?.kategori_target || ''
       if (activeTab === 'tahfidz') return cat.includes('tahfidz') || cat === 'takhassus'
@@ -175,49 +180,84 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
   if (loading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600"/></div>
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-32">
+    <div className="min-h-screen bg-slate-50">
       
-      {/* HEADER COMPACT */}
-      <header className="bg-white sticky top-0 z-10 shadow-sm border-b px-4 py-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-            <Link href={`/kelompok/${kelompokId}`} className="p-2 rounded-full hover:bg-slate-100 text-slate-600">
-                <ArrowLeft size={20}/>
-            </Link>
-            <div>
-                <h1 className="font-bold text-slate-800 leading-tight">{siswa?.nama_siswa}</h1>
-                <p className="text-xs text-slate-500">{siswa?.level?.nama}</p>
-            </div>
-        </div>
-        <div className="flex gap-2 items-center">
-            {/* TOMBOL UJIAN */}
-            {siswa?.status_tes === 'siap_tes' ? (
-                <span className="text-[10px] font-bold bg-orange-100 text-orange-700 px-2 py-1 rounded border border-orange-200">
-                    Menunggu Ujian
-                </span>
-            ) : (
-                <button 
-                    onClick={handleAjukanUjian} 
-                    disabled={submittingExam}
-                    className="p-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors flex items-center gap-1"
-                    title="Ajukan Ujian Kenaikan"
-                >
-                    {submittingExam ? <Loader2 size={18} className="animate-spin"/> : <GraduationCap size={18}/>}
+      {/* HEADER BARU (STICKY TOP) - BERSIH & NAVIGASI DI ATAS */}
+      <div className="sticky top-0 z-30 bg-white shadow-md border-b border-slate-200">
+          
+          {/* Baris 1: Navigasi & Info Siswa */}
+          <div className="flex items-center justify-between px-4 py-3">
+             <div className="flex items-center gap-3">
+                <Link href={`/kelompok/${kelompokId}`} className="p-2 -ml-2 rounded-full hover:bg-slate-100 text-slate-600">
+                    <ArrowLeft size={22}/>
+                </Link>
+                <div>
+                    <h1 className="font-bold text-slate-800 text-lg leading-none">{siswa?.nama_siswa}</h1>
+                    <p className="text-xs text-slate-500 mt-1">{siswa?.level?.nama}</p>
+                </div>
+             </div>
+             
+             {/* Tombol Navigasi Next/Prev di Header */}
+             <div className="flex items-center bg-slate-100 rounded-lg p-1">
+                <button onClick={() => navigateSiswa('prev')} className="p-2 rounded hover:bg-white hover:shadow-sm text-slate-500 disabled:opacity-30">
+                    <ChevronLeft size={20}/>
                 </button>
-            )}
-            
-            <Link href={`/arsip/${siswaId}`} className="p-2 bg-slate-100 text-slate-600 rounded-lg"><History size={18}/></Link>
-        </div>
-      </header>
+                <div className="w-px h-4 bg-slate-300 mx-1"></div>
+                <button onClick={() => navigateSiswa('next')} className="p-2 rounded hover:bg-white hover:shadow-sm text-blue-600 font-bold disabled:opacity-30">
+                    <ChevronRight size={20}/>
+                </button>
+             </div>
+          </div>
 
-      <main className="max-w-2xl mx-auto p-4 space-y-4">
+          {/* Baris 2: Selector Tanggal & Tools */}
+          <div className="px-4 pb-3 flex items-center justify-between gap-3">
+               {/* PICKER TANGGAL (BACKDATE) */}
+               <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 flex-1">
+                   <Calendar size={16} className="text-blue-500"/>
+                   <input 
+                        type="date" 
+                        className="bg-transparent text-sm font-bold text-slate-700 outline-none w-full"
+                        value={selectedDate}
+                        onChange={(e) => setSelectedDate(e.target.value)}
+                   />
+               </div>
+
+               {/* Tombol Ujian & History */}
+               <div className="flex gap-2">
+                    {siswa?.status_tes === 'siap_tes' ? (
+                        <span className="text-[10px] font-bold bg-orange-100 text-orange-700 px-2 py-1.5 rounded border border-orange-200 flex items-center">
+                           Menunggu Ujian
+                        </span>
+                    ) : (
+                        <button onClick={handleAjukanUjian} disabled={submittingExam} className="p-2 bg-indigo-50 text-indigo-600 rounded-lg border border-indigo-100">
+                            {submittingExam ? <Loader2 size={18} className="animate-spin"/> : <GraduationCap size={18}/>}
+                        </button>
+                    )}
+                    <Link href={`/arsip/${siswaId}`} className="p-2 bg-slate-50 text-slate-600 rounded-lg border border-slate-200">
+                        <History size={18}/>
+                    </Link>
+               </div>
+          </div>
+      </div>
+
+      {/* BODY CONTENT - Padding Bottom Besar agar scroll leluasa */}
+      <main className="max-w-2xl mx-auto p-4 space-y-4 pb-32">
         
-        {/* TABS BESAR */}
+        {/* INFO TANGGAL PILIHAN (Jika bukan hari ini) */}
+        {selectedDate !== new Date().toLocaleDateString('en-CA') && (
+            <div className="bg-orange-50 text-orange-700 px-4 py-2 rounded-lg text-xs font-bold border border-orange-200 flex items-center gap-2 mb-2 animate-in fade-in">
+                <AlertCircle size={14}/>
+                Mode Edit: Menginput data untuk tanggal {new Date(selectedDate).toLocaleDateString('id-ID', {day: 'numeric', month: 'long', year: 'numeric'})}
+            </div>
+        )}
+
+        {/* TABS */}
         <div className="flex bg-white p-1 rounded-xl shadow-sm border border-slate-200">
-            <button onClick={() => setActiveTab('tahfidz')} className={`flex-1 py-3 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${activeTab === 'tahfidz' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>
-                <Mic size={18}/> HAFALAN
+            <button onClick={() => setActiveTab('tahfidz')} className={`flex-1 py-2.5 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${activeTab === 'tahfidz' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>
+                <Mic size={16}/> HAFALAN
             </button>
-            <button onClick={() => setActiveTab('tilawah')} className={`flex-1 py-3 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${activeTab === 'tilawah' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>
-                <Book size={18}/> TILAWAH
+            <button onClick={() => setActiveTab('tilawah')} className={`flex-1 py-2.5 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${activeTab === 'tilawah' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>
+                <Book size={16}/> TILAWAH
             </button>
         </div>
 
@@ -227,7 +267,7 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
             </div>
         )}
 
-        {/* LIST TARGET (ACCORDION) */}
+        {/* LIST TARGET */}
         <div className="space-y-3">
             {filteredTargets.length === 0 && (
                 <div className="p-8 text-center text-slate-400 border-2 border-dashed border-slate-200 rounded-xl">Target kosong.</div>
@@ -263,7 +303,7 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                             </div>
                         </div>
 
-                        {/* BODY FORM (Hanya Render Jika Open) */}
+                        {/* BODY FORM */}
                         {isOpen && (
                             <div className="p-4 bg-slate-50 border-t border-slate-100 animate-in slide-in-from-top-2">
                                 <div className="space-y-4">
@@ -304,12 +344,13 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                                             value={formValues[target.id]?.catatan || ''} onChange={(e) => handleInputChange(target.id, 'catatan', e.target.value)} />
                                     </div>
 
+                                    {/* TOMBOL SIMPAN - TIDAK AKAN TERTUTUP LAGI */}
                                     <button 
                                         onClick={() => handleSaveItem(target.id)}
                                         disabled={savingId === target.id}
                                         className="w-full py-3 bg-blue-600 text-white font-bold rounded-lg shadow-md active:scale-95 transition-all flex justify-center items-center gap-2"
                                     >
-                                        {savingId === target.id ? <Loader2 className="animate-spin"/> : <><Save size={18}/> SIMPAN NILAI</>}
+                                        {savingId === target.id ? <Loader2 className="animate-spin"/> : <><Save size={18}/> SIMPAN {new Date(selectedDate).toLocaleDateString('id-ID', {day:'numeric', month:'short'})}</>}
                                     </button>
                                 </div>
                             </div>
@@ -319,16 +360,9 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
             })}
         </div>
       </main>
-
-      {/* FOOTER NAVIGASI */}
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t z-20">
-          <div className="max-w-2xl mx-auto flex gap-3">
-             <button onClick={() => router.back()} className="px-4 py-3 border border-slate-300 rounded-xl text-slate-600 font-bold text-sm">Kembali</button>
-             <button onClick={handleNextSiswa} className="flex-1 bg-slate-800 text-white font-bold py-3 rounded-xl shadow-lg flex justify-center items-center gap-2 hover:bg-black active:scale-95 transition-all">
-                Siswa Selanjutnya <ChevronRight size={18}/>
-             </button>
-          </div>
-      </div>
+      
+      {/* TIDAK ADA LAGI BOTTOM BAR FIXED YANG MENGGANGGU */}
+      
     </div>
   )
 }
