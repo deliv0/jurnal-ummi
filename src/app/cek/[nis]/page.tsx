@@ -3,7 +3,7 @@
 import { useState, useEffect, use } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import Link from 'next/link'
-import { ArrowLeft, User, Calendar, TrendingUp, Book, Clock, CheckCircle, XCircle, AlertCircle, Wallet } from 'lucide-react'
+import { ArrowLeft, User, Calendar, TrendingUp, Clock, CheckCircle, AlertCircle, Wallet } from 'lucide-react'
 
 export default function DetailSantriPage({ params }: { params: Promise<{ nis: string }> }) {
   const { nis } = use(params)
@@ -12,54 +12,102 @@ export default function DetailSantriPage({ params }: { params: Promise<{ nis: st
   const [siswa, setSiswa] = useState<any>(null)
   const [jurnal, setJurnal] = useState<any[]>([])
   const [absensi, setAbsensi] = useState<any[]>([])
+  
+  // State Error Handling
   const [loading, setLoading] = useState(true)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   useEffect(() => {
     const fetchData = async () => {
-        // 1. Data Siswa
-        const { data: dataSiswa } = await supabase
-            .from('siswa')
-            .select('*, level(nama), kelompok(nama_kelompok, users(nama_lengkap))')
-            .eq('nis', nis)
-            .single()
-        
-        if (dataSiswa) {
+        setLoading(true)
+        setErrorMsg(null)
+
+        try {
+            // 1. Data Siswa
+            // PERBAIKAN QUERY: Menggunakan !guru_utama_id agar supabase tahu relasinya
+            const { data: dataSiswa, error: errSiswa } = await supabase
+                .from('siswa')
+                .select(`
+                    *, 
+                    level(nama), 
+                    kelompok(
+                        nama_kelompok, 
+                        users!guru_utama_id(nama_lengkap)
+                    )
+                `)
+                .eq('nis', nis)
+                .single()
+            
+            if (errSiswa) throw new Error(`Gagal ambil siswa: ${errSiswa.message} (${errSiswa.code})`)
+            if (!dataSiswa) throw new Error("NIS tidak ditemukan")
+            
             setSiswa(dataSiswa)
 
             // 2. Jurnal Terakhir (5 Data)
-            const { data: dataJurnal } = await supabase
+            // PERBAIKAN QUERY: Menggunakan !guru_id
+            const { data: dataJurnal, error: errJurnal } = await supabase
                 .from('jurnal_harian')
-                .select('created_at, halaman_ayat, nilai, users(nama_lengkap), siswa_target!inner(target_pembelajaran(judul))')
+                .select(`
+                    created_at, 
+                    halaman_ayat, 
+                    nilai, 
+                    users!guru_id(nama_lengkap), 
+                    siswa_target!inner(
+                        target_pembelajaran(judul)
+                    )
+                `)
                 .eq('siswa_target.siswa_id', dataSiswa.id)
                 .order('created_at', { ascending: false })
                 .limit(5)
-            if(dataJurnal) setJurnal(dataJurnal)
+            
+            if (errJurnal) console.error("Error Jurnal:", errJurnal) // Log aja, jangan throw biar halaman tetap tampil
+            if (dataJurnal) setJurnal(dataJurnal)
 
             // 3. Absensi Bulan Ini
             const startMonth = new Date().toISOString().slice(0, 7) + '-01'
-            const { data: dataAbsen } = await supabase
+            const { data: dataAbsen, error: errAbsen } = await supabase
                 .from('absensi')
                 .select('*')
                 .eq('siswa_id', dataSiswa.id)
                 .gte('tanggal', startMonth)
                 .order('tanggal', { ascending: false })
-            if(dataAbsen) setAbsensi(dataAbsen)
+            
+            if (errAbsen) console.error("Error Absen:", errAbsen)
+            if (dataAbsen) setAbsensi(dataAbsen)
+
+        } catch (err: any) {
+            console.error("FULL ERROR:", err)
+            setErrorMsg(err.message)
+        } finally {
+            setLoading(false)
         }
-        setLoading(false)
     }
     fetchData()
   }, [nis])
 
-  if (loading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center text-blue-600 font-bold">Memuat Data...</div>
+  if (loading) return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center flex-col gap-2">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <p className="text-blue-600 font-bold text-sm">Sedang memuat data...</p>
+      </div>
+  )
 
-  if (!siswa) return (
+  if (errorMsg) return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
-        <h1 className="text-xl font-bold text-slate-800 mb-2">Data Tidak Ditemukan</h1>
-        <Link href="/cek" className="text-blue-600 underline">Cari Kembali</Link>
+        <div className="bg-red-100 p-4 rounded-full mb-4 text-red-600"><AlertCircle size={32}/></div>
+        <h1 className="text-xl font-bold text-slate-800 mb-2">Terjadi Kesalahan</h1>
+        <p className="text-red-600 bg-red-50 p-3 rounded-lg border border-red-100 text-sm font-mono max-w-md mx-auto mb-6">
+            {errorMsg}
+        </p>
+        <Link href="/cek" className="px-6 py-3 bg-slate-800 text-white rounded-xl font-bold hover:bg-black transition-all">
+            Coba Cari Lagi
+        </Link>
     </div>
   )
 
   const saldo = siswa.saldo_sesi || 0
+  // Handle jika relasi kelompok/guru kosong (Safety Check)
+  const namaGuru = siswa.kelompok?.users?.nama_lengkap || '-' 
 
   return (
     <div className="min-h-screen bg-slate-50 pb-10">
@@ -76,14 +124,14 @@ export default function DetailSantriPage({ params }: { params: Promise<{ nis: st
                 <h1 className="text-2xl font-bold">{siswa.nama_siswa}</h1>
                 <p className="text-blue-100 text-sm mt-1">{siswa.kelompok?.nama_kelompok} • {siswa.level?.nama}</p>
                 <div className="mt-2 text-xs bg-blue-700/50 px-3 py-1 rounded-full border border-blue-500/30">
-                    Guru: {siswa.kelompok?.users?.nama_lengkap || '-'}
+                    Guru: {namaGuru}
                 </div>
             </div>
         </div>
 
         <div className="max-w-xl mx-auto px-4 -mt-10 space-y-6">
             
-            {/* KARTU KEUANGAN (Penting untuk Wali Santri) */}
+            {/* KARTU KEUANGAN */}
             <div className="bg-white p-5 rounded-xl shadow-md border border-slate-100">
                 <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2">
                     <Wallet className="text-blue-600"/> Status Administrasi
@@ -108,7 +156,7 @@ export default function DetailSantriPage({ params }: { params: Promise<{ nis: st
                     <Calendar className="text-orange-500"/> Kehadiran Bulan Ini
                 </h3>
                 {absensi.length > 0 ? (
-                    <div className="flex gap-2 overflow-x-auto pb-2">
+                    <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
                         {absensi.map((a, i) => (
                             <div key={i} className="flex-shrink-0 flex flex-col items-center">
                                 <div className={`w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold text-white mb-2
