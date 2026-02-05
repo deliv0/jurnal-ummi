@@ -12,16 +12,13 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
   const supabase = createClient()
   const router = useRouter()
 
-  // STATE DATA
   const [siswa, setSiswa] = useState<any>(null)
   const [activeTargets, setActiveTargets] = useState<any[]>([])
   const [riwayat, setRiwayat] = useState<any[]>([])
   const [kelompokSiswa, setKelompokSiswa] = useState<any[]>([]) 
   const [loading, setLoading] = useState(true)
 
-  // STATE UI & FORM
-  // Default tanggal adalah HARI INI (YYYY-MM-DD)
-  const [selectedDate, setSelectedDate] = useState(new Date().toLocaleDateString('en-CA')) // Format YYYY-MM-DD lokal
+  const [selectedDate, setSelectedDate] = useState(new Date().toLocaleDateString('en-CA')) 
   const [activeTab, setActiveTab] = useState<'tahfidz' | 'tilawah'>('tahfidz') 
   const [expandedTarget, setExpandedTarget] = useState<string | null>(null) 
   const [savingId, setSavingId] = useState<string | null>(null)
@@ -37,18 +34,14 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
 
   const fetchAllData = async () => {
     setLoading(true)
-    
-    // 1. DATA SISWA
     const { data: dataSiswa } = await supabase.from('siswa').select('*, kelompok(nama_kelompok), level(nama)').eq('id', siswaId).single()
     if(dataSiswa) setSiswa(dataSiswa)
 
-    // 2. LIST TEMAN (Untuk Navigasi Next/Prev)
     if(dataSiswa?.kelompok_id) {
         const { data: teman } = await supabase.from('siswa').select('id').eq('kelompok_id', dataSiswa.kelompok_id).eq('status', 'aktif').order('nama_siswa')
         if(teman) setKelompokSiswa(teman)
     }
 
-    // 3. TARGET HAFALAN
     let currentTargets = []
     const { data: existingTargets } = await supabase.from('siswa_target').select('*, target_pembelajaran(judul, kategori_target)').eq('siswa_id', siswaId).eq('status', 'active')
 
@@ -72,7 +65,6 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
       setFormValues(initialForm)
     }
 
-    // 4. RIWAYAT (Hanya 3 Terakhir untuk referensi)
     const { data: dataRiwayat } = await supabase.from('jurnal_harian').select(`
         created_at, halaman_ayat, nilai, catatan, siswa_target_id, siswa_target!inner ( target_pembelajaran ( judul ) )
     `).eq('siswa_target.siswa_id', siswaId).order('created_at', { ascending: false }).limit(3)
@@ -81,7 +73,6 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
     setLoading(false)
   }
 
-  // --- LOGIC FORM ---
   const handleInputChange = (targetId: string, field: string, value: string) => {
     setFormValues(prev => ({ ...prev, [targetId]: { ...prev[targetId], [field]: value } }))
   }
@@ -107,12 +98,11 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
         const input = formValues[targetId]
         if (!input.halaman && !input.nilai) throw new Error("Mohon isi capaian atau nilai.")
 
-        // LOGIC TANGGAL: Gabungkan Tanggal Dipilih + Jam Sekarang (Agar urutan log tetap benar)
-        const timePart = new Date().toTimeString().split(' ')[0] // HH:MM:SS
+        const timePart = new Date().toTimeString().split(' ')[0]
         const dateTimeString = `${selectedDate}T${timePart}`
 
         const { error } = await supabase.from('jurnal_harian').insert({
-            created_at: new Date(dateTimeString).toISOString(), // GUNAKAN TANGGAL PILIHAN
+            created_at: new Date(dateTimeString).toISOString(),
             siswa_target_id: targetId,
             guru_id: user?.id,
             status_kehadiran: 'hadir',
@@ -123,7 +113,6 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
         if(error) throw error
         setMessage({ type: 'success', text: 'Tersimpan!' })
         
-        // Update Riwayat Lokal (Agar guru langsung lihat hasil inputnya)
         setRiwayat(prev => [{
             created_at: new Date(dateTimeString).toISOString(),
             halaman_ayat: input.halaman,
@@ -133,7 +122,6 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
             siswa_target: { target_pembelajaran: { judul: activeTargets.find(t=>t.id===targetId)?.target_pembelajaran?.judul } }
         }, ...prev])
 
-        // Reset Form
         setFormValues(prev => ({ ...prev, [targetId]: { halaman: '', nilai: '', catatan: '' } }))
         setQuranState(prev => { const n = {...prev}; delete n[targetId]; return n; })
         setExpandedTarget(null)
@@ -154,7 +142,6 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
       } catch (err: any) { alert(err.message) } finally { setSubmittingExam(false) }
   }
 
-  // NAVIGASI NEXT/PREV
   const navigateSiswa = (direction: 'next' | 'prev') => {
       const currentIndex = kelompokSiswa.findIndex(s => s.id === siswaId)
       if (currentIndex === -1) return
@@ -180,25 +167,24 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
   if (loading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600"/></div>
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    // Tambahkan flex-col agar struktur layout lebih solid
+    <div className="min-h-screen bg-slate-50 flex flex-col">
       
-      {/* HEADER BARU (STICKY TOP) - BERSIH & NAVIGASI DI ATAS */}
-      <div className="sticky top-0 z-30 bg-white shadow-md border-b border-slate-200">
+      {/* HEADER BARU (STICKY) - Z-INDEX 50 */}
+      <div className="sticky top-0 z-50 bg-white shadow-md border-b border-slate-200 w-full">
           
-          {/* Baris 1: Navigasi & Info Siswa */}
           <div className="flex items-center justify-between px-4 py-3">
              <div className="flex items-center gap-3">
                 <Link href={`/kelompok/${kelompokId}`} className="p-2 -ml-2 rounded-full hover:bg-slate-100 text-slate-600">
                     <ArrowLeft size={22}/>
                 </Link>
                 <div>
-                    <h1 className="font-bold text-slate-800 text-lg leading-none">{siswa?.nama_siswa}</h1>
+                    <h1 className="font-bold text-slate-800 text-lg leading-none truncate max-w-[150px]">{siswa?.nama_siswa}</h1>
                     <p className="text-xs text-slate-500 mt-1">{siswa?.level?.nama}</p>
                 </div>
              </div>
              
-             {/* Tombol Navigasi Next/Prev di Header */}
-             <div className="flex items-center bg-slate-100 rounded-lg p-1">
+             <div className="flex items-center bg-slate-100 rounded-lg p-1 shrink-0">
                 <button onClick={() => navigateSiswa('prev')} className="p-2 rounded hover:bg-white hover:shadow-sm text-slate-500 disabled:opacity-30">
                     <ChevronLeft size={20}/>
                 </button>
@@ -209,11 +195,9 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
              </div>
           </div>
 
-          {/* Baris 2: Selector Tanggal & Tools */}
           <div className="px-4 pb-3 flex items-center justify-between gap-3">
-               {/* PICKER TANGGAL (BACKDATE) */}
                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 flex-1">
-                   <Calendar size={16} className="text-blue-500"/>
+                   <Calendar size={16} className="text-blue-500 shrink-0"/>
                    <input 
                         type="date" 
                         className="bg-transparent text-sm font-bold text-slate-700 outline-none w-full"
@@ -222,15 +206,14 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                    />
                </div>
 
-               {/* Tombol Ujian & History */}
-               <div className="flex gap-2">
+               <div className="flex gap-2 shrink-0">
                     {siswa?.status_tes === 'siap_tes' ? (
                         <span className="text-[10px] font-bold bg-orange-100 text-orange-700 px-2 py-1.5 rounded border border-orange-200 flex items-center">
-                           Menunggu Ujian
+                           Ujian
                         </span>
                     ) : (
                         <button onClick={handleAjukanUjian} disabled={submittingExam} className="p-2 bg-indigo-50 text-indigo-600 rounded-lg border border-indigo-100">
-                            {submittingExam ? <Loader2 size={18} className="animate-spin"/> : <GraduationCap size={18}/>}
+                            <GraduationCap size={18}/>
                         </button>
                     )}
                     <Link href={`/arsip/${siswaId}`} className="p-2 bg-slate-50 text-slate-600 rounded-lg border border-slate-200">
@@ -240,18 +223,16 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
           </div>
       </div>
 
-      {/* BODY CONTENT - Padding Bottom Besar agar scroll leluasa */}
-      <main className="max-w-2xl mx-auto p-4 space-y-4 pb-32">
+      {/* BODY CONTENT */}
+      <main className="flex-1 max-w-2xl mx-auto p-4 space-y-4 pb-32 w-full">
         
-        {/* INFO TANGGAL PILIHAN (Jika bukan hari ini) */}
         {selectedDate !== new Date().toLocaleDateString('en-CA') && (
             <div className="bg-orange-50 text-orange-700 px-4 py-2 rounded-lg text-xs font-bold border border-orange-200 flex items-center gap-2 mb-2 animate-in fade-in">
                 <AlertCircle size={14}/>
-                Mode Edit: Menginput data untuk tanggal {new Date(selectedDate).toLocaleDateString('id-ID', {day: 'numeric', month: 'long', year: 'numeric'})}
+                Mode Edit: {new Date(selectedDate).toLocaleDateString('id-ID', {day: 'numeric', month: 'short'})}
             </div>
         )}
 
-        {/* TABS */}
         <div className="flex bg-white p-1 rounded-xl shadow-sm border border-slate-200">
             <button onClick={() => setActiveTab('tahfidz')} className={`flex-1 py-2.5 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${activeTab === 'tahfidz' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>
                 <Mic size={16}/> HAFALAN
@@ -267,7 +248,6 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
             </div>
         )}
 
-        {/* LIST TARGET */}
         <div className="space-y-3">
             {filteredTargets.length === 0 && (
                 <div className="p-8 text-center text-slate-400 border-2 border-dashed border-slate-200 rounded-xl">Target kosong.</div>
@@ -283,7 +263,6 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                 return (
                     <div key={target.id} className={`bg-white rounded-xl border transition-all duration-300 overflow-hidden ${isOpen ? 'ring-2 ring-blue-500 border-transparent shadow-lg' : 'border-slate-200 shadow-sm'}`}>
                         
-                        {/* HEADER ACCORDION */}
                         <div 
                             onClick={() => setExpandedTarget(isOpen ? null : target.id)}
                             className="p-4 flex justify-between items-center cursor-pointer hover:bg-slate-50 active:bg-slate-100"
@@ -292,7 +271,7 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                                 <h3 className={`font-bold text-sm ${isOpen ? 'text-blue-700' : 'text-slate-800'}`}>{target.target_pembelajaran?.judul}</h3>
                                 {lastLog ? (
                                     <p className="text-xs text-slate-500 mt-1 flex items-center gap-1">
-                                        <History size={10}/> Terakhir: <span className="font-medium text-slate-700">{lastLog.halaman_ayat}</span> ({lastLog.nilai})
+                                        <History size={10}/> <span className="font-medium text-slate-700">{lastLog.halaman_ayat}</span> ({lastLog.nilai})
                                     </p>
                                 ) : (
                                     <p className="text-xs text-slate-400 mt-1 italic">Belum ada nilai</p>
@@ -303,7 +282,6 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                             </div>
                         </div>
 
-                        {/* BODY FORM */}
                         {isOpen && (
                             <div className="p-4 bg-slate-50 border-t border-slate-100 animate-in slide-in-from-top-2">
                                 <div className="space-y-4">
@@ -340,17 +318,16 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
                                             <option value="C">C</option>
                                             <option value="D">D</option>
                                         </select>
-                                        <input type="text" placeholder="Catatan (Opsional)" className="flex-1 p-3 rounded-lg border border-slate-300 text-sm" 
+                                        <input type="text" placeholder="Catatan" className="flex-1 p-3 rounded-lg border border-slate-300 text-sm" 
                                             value={formValues[target.id]?.catatan || ''} onChange={(e) => handleInputChange(target.id, 'catatan', e.target.value)} />
                                     </div>
 
-                                    {/* TOMBOL SIMPAN - TIDAK AKAN TERTUTUP LAGI */}
                                     <button 
                                         onClick={() => handleSaveItem(target.id)}
                                         disabled={savingId === target.id}
                                         className="w-full py-3 bg-blue-600 text-white font-bold rounded-lg shadow-md active:scale-95 transition-all flex justify-center items-center gap-2"
                                     >
-                                        {savingId === target.id ? <Loader2 className="animate-spin"/> : <><Save size={18}/> SIMPAN {new Date(selectedDate).toLocaleDateString('id-ID', {day:'numeric', month:'short'})}</>}
+                                        {savingId === target.id ? <Loader2 className="animate-spin"/> : <><Save size={18}/> SIMPAN NILAI</>}
                                     </button>
                                 </div>
                             </div>
@@ -360,9 +337,6 @@ export default function InputJurnalPage({ params }: { params: Promise<{ id: stri
             })}
         </div>
       </main>
-      
-      {/* TIDAK ADA LAGI BOTTOM BAR FIXED YANG MENGGANGGU */}
-      
     </div>
   )
 }
