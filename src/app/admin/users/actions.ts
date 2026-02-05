@@ -3,52 +3,59 @@
 import { createClient } from '@supabase/supabase-js'
 import { revalidatePath } from 'next/cache'
 
-// Kita gunakan Library 'supabase-js' langsung (bukan helper Next.js) 
-// karena kita butuh akses Admin dengan Service Role Key
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false
-    }
-  }
-)
+// Pastikan Service Key ada agar tidak error saat build
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 
+if (!supabaseUrl || !supabaseServiceKey) {
+  throw new Error("Supabase URL atau Service Role Key belum disetting di .env.local")
+}
+
+// Client Admin khusus Server
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false
+  }
+})
+
+// --- 1. CREATE USER ---
 export async function createUser(prevState: any, formData: FormData) {
-  const nama = String(formData.get('nama'))
-  const email = String(formData.get('email'))
-  const password = String(formData.get('password'))
-  const role = String(formData.get('role')) // 'admin' atau 'guru'
+  const nama = formData.get('nama') as string
+  const email = formData.get('email') as string
+  const password = formData.get('password') as string
+  const role = formData.get('role') as string
+
+  if (!email || !password || !nama) {
+      return { success: false, message: "Data tidak lengkap" }
+  }
 
   try {
-    // 1. Buat User di Supabase Auth (Database Akun)
+    // A. Buat Akun Auth
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email: email,
       password: password,
-      email_confirm: true // Langsung verifikasi email agar bisa login
+      email_confirm: true 
     })
 
     if (authError) throw new Error(authError.message)
     if (!authData.user) throw new Error("Gagal membuat user.")
 
-    // 2. Tentukan Roles (Array)
+    // B. Simpan Profil ke Database
     const rolesArray = role === 'admin' ? ['admin', 'guru'] : ['guru']
 
-    // 3. Masukkan Data Profil ke Tabel 'users' (Database Profil)
-    // Kita gunakan Upsert agar jika trigger database sudah membuatnya, kita tinggal update isinya
     const { error: profileError } = await supabaseAdmin
       .from('users')
       .upsert({
         id: authData.user.id,
         nama_lengkap: nama,
         email: email,
-        roles: rolesArray
+        roles: rolesArray,
+        status: 'aktif'
       })
 
     if (profileError) {
-        // Jika gagal simpan profil, hapus akun auth biar tidak jadi sampah
+        // Rollback: Hapus akun auth jika profil gagal dibuat
         await supabaseAdmin.auth.admin.deleteUser(authData.user.id)
         throw new Error("Gagal menyimpan profil: " + profileError.message)
     }
@@ -61,16 +68,40 @@ export async function createUser(prevState: any, formData: FormData) {
   }
 }
 
+// --- 2. UPDATE USER (Baru) ---
+export async function updateUser(userId: string, formData: FormData) {
+  const nama = formData.get('nama') as string
+  const role = formData.get('role') as string
+
+  try {
+    const rolesArray = role === 'admin' ? ['admin', 'guru'] : ['guru']
+
+    const { error } = await supabaseAdmin
+      .from('users')
+      .update({
+        nama_lengkap: nama,
+        roles: rolesArray
+      })
+      .eq('id', userId)
+
+    if (error) throw new Error(error.message)
+
+    revalidatePath('/admin/users')
+    return { success: true, message: `Data ${nama} berhasil diperbarui!` }
+
+  } catch (error: any) {
+    return { success: false, message: error.message }
+  }
+}
+
+// --- 3. DELETE USER ---
 export async function deleteUser(userId: string) {
     try {
-        // Hapus dari Auth (Otomatis profile di public.users terhapus jika settingan cascade benar)
-        // Tapi kita hapus manual dua-duanya biar aman
-        
-        // 1. Hapus Auth
+        // Hapus Auth (Cascade ke public.users biasanya otomatis, tapi kita double check)
         const { error } = await supabaseAdmin.auth.admin.deleteUser(userId)
         if(error) throw error
 
-        // 2. Hapus Profile (Opsional jika cascade, tapi aman dilakukan)
+        // Hapus Profile Manual (Jika cascade tidak jalan)
         await supabaseAdmin.from('users').delete().eq('id', userId)
 
         revalidatePath('/admin/users')

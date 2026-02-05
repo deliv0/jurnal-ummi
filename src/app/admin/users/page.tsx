@@ -3,25 +3,26 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import Link from 'next/link'
-import { ArrowLeft, UserPlus, Trash2, Shield, User, Loader2, CheckCircle, AlertCircle, Key } from 'lucide-react'
-import { createUser, deleteUser } from './actions' // Import Server Actions tadi
+import { ArrowLeft, UserPlus, Trash2, Shield, User, Loader2, CheckCircle, AlertCircle, Edit3, X } from 'lucide-react'
+import { createUser, deleteUser, updateUser } from './actions'
 
 export default function AdminUsersPage() {
   const supabase = createClient()
   
-  // STATE
+  // STATE DATA
   const [users, setUsers] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   
-  // FORM STATE
-  const [showForm, setShowForm] = useState(false)
+  // STATE FORM
+  const [showCreateForm, setShowCreateForm] = useState(false)
+  const [editingUser, setEditingUser] = useState<any>(null)
+  
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [message, setMessage] = useState<{type: 'success'|'error', text: string} | null>(null)
 
   // 1. FETCH USERS
   const fetchUsers = async () => {
     setLoading(true)
-    // Kita ambil dari tabel public.users
     const { data } = await supabase
       .from('users')
       .select('*')
@@ -35,38 +36,61 @@ export default function AdminUsersPage() {
     fetchUsers()
   }, [])
 
-  // 2. HANDLE CREATE USER
-  const handleSubmit = async (e: any) => {
+  // 2. HANDLE CREATE
+  const handleCreateSubmit = async (e: any) => {
     e.preventDefault()
     setIsSubmitting(true)
     setMessage(null)
 
     const formData = new FormData(e.target)
-    
-    // Panggil Server Action
     const result = await createUser(null, formData)
 
     if (result.success) {
         setMessage({ type: 'success', text: result.message })
-        setShowForm(false)
+        setShowCreateForm(false)
         e.target.reset()
-        fetchUsers() // Refresh list
+        fetchUsers()
     } else {
         setMessage({ type: 'error', text: result.message })
     }
     setIsSubmitting(false)
   }
 
-  // 3. HANDLE DELETE USER
+  // 3. HANDLE EDIT / UPDATE
+  const handleUpdateSubmit = async (e: any) => {
+      e.preventDefault()
+      setIsSubmitting(true)
+      
+      const formData = new FormData(e.target)
+      const result = await updateUser(editingUser.id, formData)
+
+      if (result.success) {
+          setMessage({ type: 'success', text: result.message })
+          setEditingUser(null)
+          fetchUsers()
+      } else {
+          setMessage({ type: 'error', text: result.message })
+      }
+      setIsSubmitting(false)
+  }
+
+  // 4. HANDLE DELETE
   const handleDelete = async (id: string, nama: string) => {
       if(!confirm(`Yakin ingin menghapus user ${nama}? Data ini tidak bisa dikembalikan.`)) return
 
       const result = await deleteUser(id)
       if(result.success) {
+          setMessage({ type: 'success', text: "User berhasil dihapus." })
           fetchUsers()
       } else {
-          alert("Gagal menghapus: " + result.message)
+          setMessage({ type: 'error', text: result.message })
       }
+  }
+
+  const checkIsAdmin = (roles: any) => {
+      if (Array.isArray(roles)) return roles.includes('admin')
+      if (typeof roles === 'string') return roles.includes('admin')
+      return false
   }
 
   return (
@@ -82,33 +106,30 @@ export default function AdminUsersPage() {
           </div>
         </div>
 
-        {/* FEEDBACK */}
         {message && (
-            <div className={`mb-4 p-4 rounded-md flex items-center gap-2 ${message.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+            <div className={`mb-4 p-4 rounded-md flex items-center gap-2 animate-in fade-in slide-in-from-top-2 ${message.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                 {message.type === 'success' ? <CheckCircle size={20}/> : <AlertCircle size={20}/>}
                 {message.text}
             </div>
         )}
 
-        {/* TOMBOL TAMBAH */}
-        {!showForm && (
+        {!showCreateForm && !editingUser && (
             <button 
-                onClick={() => setShowForm(true)}
+                onClick={() => setShowCreateForm(true)}
                 className="mb-6 flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors shadow-sm"
             >
                 <UserPlus size={18}/> Tambah Guru Baru
             </button>
         )}
 
-        {/* FORM TAMBAH USER */}
-        {showForm && (
+        {/* FORM CREATE */}
+        {showCreateForm && (
             <div className="mb-8 bg-white p-6 rounded-xl shadow-md border border-slate-200 animate-in fade-in slide-in-from-top-4">
                 <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-lg font-bold text-slate-800">Formulir User Baru</h3>
-                    <button onClick={() => setShowForm(false)} className="text-sm text-slate-400 hover:text-red-500">Batal</button>
+                    <h3 className="text-lg font-bold text-slate-800">Tambah User Baru</h3>
+                    <button onClick={() => setShowCreateForm(false)} className="text-slate-400 hover:text-red-500"><X size={20}/></button>
                 </div>
-                
-                <form onSubmit={handleSubmit} className="space-y-4">
+                <form onSubmit={handleCreateSubmit} className="space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                             <label className="block text-sm font-medium text-slate-700 mb-1">Nama Lengkap</label>
@@ -121,27 +142,67 @@ export default function AdminUsersPage() {
                         <div>
                             <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
                             <input name="password" type="text" required minLength={6} className="w-full p-2 border rounded-lg" placeholder="Minimal 6 karakter"/>
-                            <p className="text-xs text-slate-500 mt-1">Sarankan password yang kuat.</p>
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Hak Akses (Role)</label>
-                            <select name="role" className="w-full p-2 border rounded-lg">
-                                <option value="guru">Guru (Standard)</option>
-                                <option value="admin">Admin (Full Access)</option>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Hak Akses</label>
+                            <select name="role" className="w-full p-2 border rounded-lg bg-white">
+                                <option value="guru">Guru</option>
+                                <option value="admin">Admin</option>
                             </select>
                         </div>
                     </div>
-                    <div className="pt-2">
-                        <button disabled={isSubmitting} className="w-full md:w-auto bg-blue-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-blue-700 flex items-center justify-center gap-2">
-                            {isSubmitting ? <Loader2 className="animate-spin"/> : <UserPlus size={18}/>}
-                            Buat Akun
+                    <div className="pt-2 flex gap-2">
+                        <button type="button" onClick={() => setShowCreateForm(false)} className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50">Batal</button>
+                        <button disabled={isSubmitting} className="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-blue-700 flex items-center justify-center gap-2">
+                            {isSubmitting ? <Loader2 className="animate-spin"/> : 'Simpan'}
                         </button>
                     </div>
                 </form>
             </div>
         )}
 
-        {/* LIST USER */}
+        {/* FORM EDIT */}
+        {editingUser && (
+            <div className="mb-8 bg-blue-50 p-6 rounded-xl shadow-md border border-blue-200 animate-in fade-in slide-in-from-top-4">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-lg font-bold text-blue-900">Edit Data: {editingUser.nama_lengkap}</h3>
+                    <button onClick={() => setEditingUser(null)} className="text-slate-400 hover:text-red-500"><X size={20}/></button>
+                </div>
+                <form onSubmit={handleUpdateSubmit} className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-blue-800 mb-1">Nama Lengkap</label>
+                            <input 
+                                name="nama" 
+                                type="text" 
+                                required 
+                                className="w-full p-2 border rounded-lg" 
+                                defaultValue={editingUser.nama_lengkap}
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-blue-800 mb-1">Hak Akses</label>
+                            <select 
+                                name="role" 
+                                className="w-full p-2 border rounded-lg bg-white"
+                                defaultValue={checkIsAdmin(editingUser.roles) ? 'admin' : 'guru'}
+                            >
+                                <option value="guru">Guru</option>
+                                <option value="admin">Admin</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div className="pt-2 flex gap-2">
+                        <button type="button" onClick={() => setEditingUser(null)} className="px-4 py-2 border border-blue-200 rounded-lg text-slate-600 hover:bg-white">Batal</button>
+                        <button disabled={isSubmitting} className="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-blue-700 flex items-center justify-center gap-2">
+                            {isSubmitting ? <Loader2 className="animate-spin"/> : 'Update Data'}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        )}
+
+        {/* TABLE */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <table className="w-full text-left border-collapse">
                 <thead className="bg-slate-50 border-b border-slate-200">
@@ -154,7 +215,7 @@ export default function AdminUsersPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                     {users.map((u) => {
-                        const isAdminRole = JSON.stringify(u.roles).includes('admin')
+                        const isAdminRole = checkIsAdmin(u.roles)
                         return (
                             <tr key={u.id} className="hover:bg-slate-50 transition-colors">
                                 <td className="p-4">
@@ -173,7 +234,14 @@ export default function AdminUsersPage() {
                                         </span>
                                     )}
                                 </td>
-                                <td className="p-4 text-right">
+                                <td className="p-4 text-right flex justify-end gap-2">
+                                    <button 
+                                        onClick={() => { setEditingUser(u); setShowCreateForm(false); }}
+                                        className="p-2 text-blue-600 hover:bg-blue-50 rounded transition-all"
+                                        title="Edit User"
+                                    >
+                                        <Edit3 size={18}/>
+                                    </button>
                                     <button 
                                         onClick={() => handleDelete(u.id, u.nama_lengkap)}
                                         className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-all" 
